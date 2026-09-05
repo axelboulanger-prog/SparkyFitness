@@ -26,7 +26,16 @@
           }
         }
       ],
-      "react-native-health-connect",
+      [
+        "react-native-health-connect",
+        {
+          "UIBackgroundModes": [],
+          "permissions": [
+            "android.permission.health.WRITE_NUTRITION",
+            "android.permission.health.WRITE_HYDRATION"
+          ]
+        }
+      ],
       "expo-web-browser",
       "expo-font",
       "expo-asset",
@@ -51,25 +60,60 @@
           }
         }
       ],
-      ["expo-notifications"],
+      [
+        "expo-notifications"
+      ],
       [
         "expo-navigation-bar",
         {
           "enforceContrast": false
         }
       ],
-      ["@bacons/apple-targets"]
+      [
+        "@bacons/apple-targets"
+      ]
     ],
     "experiments": {
       "reactCompiler": true,
       "autolinkingModuleResolution": true
     },
     "extra": {
-      "eas": {
-        "projectId": "498a86c5-344f-4d2c-9033-dfd720e4a383"
+      "APP_VARIANT": "dev",
+      "iosAppGroup": "group.org.SparkyApps.SparkyFitnessMobile1.dev",
+      "expo-navigation-bar": {
+        "enforceContrast": false
       },
-      "APP_VARIANT": "production"
+      "eas": {
+        "build": {
+          "experimental": {
+            "ios": {
+              "appExtensions": [
+                {
+                  "bundleIdentifier": "org.SparkyApps.SparkyFitnessMobile1.dev.widget",
+                  "targetName": "CalorieTracker",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.org.SparkyApps.SparkyFitnessMobile1.dev"
+                    ]
+                  }
+                },
+                {
+                  "targetName": "ExpoWidgetsTarget",
+                  "bundleIdentifier": "org.SparkyApps.SparkyFitnessMobile1.dev.ExpoWidgetsTarget",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.org.SparkyApps.SparkyFitnessMobile1.dev"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "projectId": "875b0a47-09be-4d59-b32b-ff62e423251a"
+      }
     },
-    "version": "1.6.4"
+    "version": "1.6.4",
+    "owner": "menistil"
   }
 }

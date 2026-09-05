@@ -5,10 +5,8 @@ import {
 } from 'expo/config-plugins';
 import fs from 'fs';
 import path from 'path';
-import {
-  FALLBACK_LOCALE,
-  SUPPORTED_LANGUAGES,
-} from '../src/localization/localeRegistry';
+const FALLBACK_LOCALE = 'en';
+const SUPPORTED_LANGUAGES = ['en', 'pl', 'es'] as const;
 
 const LANGUAGE_PACKAGE = 'com.sparkyapps.sparkyfitness.language';
 export const LANGUAGE_IMPORT = `import ${LANGUAGE_PACKAGE}.AppLanguagePackage`;

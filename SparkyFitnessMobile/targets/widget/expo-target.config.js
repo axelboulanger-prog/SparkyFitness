@@ -2,7 +2,7 @@ const {
   getIosAppGroup,
   isDevVariant,
   DEV_BUNDLE_IDENTIFIER,
-} = require('../../app.identifiers.js');
+} = require('../../app.identifiers.cjs');
 const fs = require('fs');
 const path = require('path');
 

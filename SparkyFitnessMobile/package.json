@@ -2,6 +2,7 @@
   "name": "sparkyfitnessmobile",
   "version": "1.6.4",
   "private": true,
+  "type": "module",
   "expo": {
     "autolinking": {
       "exclude": [
@@ -10,6 +11,7 @@
     }
   },
   "scripts": {
+    "eas-build-pre-install": "npm install -g pnpm",
     "set-version": "pnpm -w run set-version",
     "android": "expo run:android",
     "ios": "expo run:ios",

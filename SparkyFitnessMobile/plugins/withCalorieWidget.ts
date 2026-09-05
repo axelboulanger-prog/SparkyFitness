@@ -15,10 +15,8 @@ import {
 } from 'expo/config-plugins';
 import fs from 'fs';
 import path from 'path';
-import {
-  FALLBACK_LOCALE,
-  SUPPORTED_LANGUAGES,
-} from '../src/localization/localeRegistry';
+const FALLBACK_LOCALE = 'en';
+const SUPPORTED_LANGUAGES = ['en', 'pl', 'es'] as const;
 
 const WIDGET_PACKAGE = 'com.sparkyapps.sparkyfitness.widget';
 const WIDGET_PACKAGE_IMPORT = `import ${WIDGET_PACKAGE}.CalorieWidgetPackage`;

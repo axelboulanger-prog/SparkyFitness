@@ -1,21 +1,29 @@
-import 'tsx/cjs';
-import { ExpoConfig, ConfigContext } from 'expo/config';
-import { nativeLanguageTags } from './src/localization/localeRegistry';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const {
-  getIosAppGroup,
-  DEV_BUNDLE_IDENTIFIER,
-} = require('./app.identifiers.js');
+import { readFileSync } from 'node:fs';
 
+const DEV_BUNDLE_IDENTIFIER =
+  process.env.EXPO_DEV_BUNDLE_IDENTIFIER ||
+  'org.SparkyApps.SparkyFitnessMobile1.dev';
+const IOS_APP_GROUP_DEV =
+  process.env.IOS_APP_GROUP_DEV ||
+  'group.org.SparkyApps.SparkyFitnessMobile1.dev';
+const IOS_APP_GROUP_PROD =
+  process.env.IOS_APP_GROUP_PROD ||
+  'group.com.SparkyApps.SparkyFitnessMobile.shared';
+const getIosAppGroup = () => {
+  const environment = process.env.APP_VARIANT || 'dev';
+  return environment === 'dev' || environment === 'development'
+    ? IOS_APP_GROUP_DEV
+    : IOS_APP_GROUP_PROD;
+};
 const APP_NAME = 'SparkyFitness';
 const APP_SLUG = 'sparkyfitnessmobile';
 const ANDROID_PROD_BUNDLE_IDENTIFIER = 'com.SparkyApps.SparkyFitnessMobile';
 const IOS_PROD_BUNDLE_IDENTIFIER = 'com.SparkyApps.SparkyFitnessMobile';
-const DEV_APPLE_TEAM_ID = process.env.EXPO_DEV_APPLE_TEAM_ID || '';
-const PROD_APPLE_TEAM_ID = process.env.EXPO_PROD_APPLE_TEAM_ID || '';
-
+const DEV_APPLE_TEAM_ID = process.env.EXPO_DEV_APPLE_TEAM_ID || '0000000000';
+const PROD_APPLE_TEAM_ID = process.env.EXPO_PROD_APPLE_TEAM_ID || '0000000000';
 const DEV_PACKAGE = DEV_BUNDLE_IDENTIFIER;
 const PROD_PACKAGE = ANDROID_PROD_BUNDLE_IDENTIFIER;
+const NATIVE_LANGUAGE_TAGS = ['en', 'pl', 'es'];
 
 const androidPermissions = [
   'android.permission.INTERNET',
@@ -30,10 +38,6 @@ const androidPermissions = [
   'android.permission.health.READ_CERVICAL_MUCUS',
   'android.permission.health.READ_CYCLING_PEDALING_CADENCE',
   'android.permission.health.READ_EXERCISE',
-  // Route data is gated separately from READ_EXERCISE and is granted per
-  // session through requestExerciseRoute's system dialog; the blanket
-  // READ_EXERCISE_ROUTES_ALL is a restricted permission Google grants only to
-  // allowlisted apps. READ_HEALTH_DATA_IN_BACKGROUND does not cover routes.
   'android.permission.health.READ_EXERCISE_ROUTES',
   'android.permission.health.READ_DISTANCE',
   'android.permission.health.READ_ELEVATION_GAINED',
@@ -61,13 +65,8 @@ const androidPermissions = [
   'android.permission.health.READ_WHEELCHAIR_PUSHES',
   'android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND',
   'android.permission.health.READ_HEALTH_DATA_HISTORY',
-  // Writeback (Sparky → Health Connect): nutrition + water. Production feature,
-  // so these live in the base list (not the dev-only writes below).
   'android.permission.health.WRITE_NUTRITION',
   'android.permission.health.WRITE_HYDRATION',
-  // Exact rest-complete alerts: without this special access (user-granted via
-  // "Alarms & reminders" on Android 13+), expo-notifications falls back to
-  // inexact alarms that the OS batches ~15s late.
   'android.permission.SCHEDULE_EXACT_ALARM',
 ];
 
@@ -89,7 +88,6 @@ const devAndroidPermissions = [
   'android.permission.health.WRITE_FLOORS_CLIMBED',
   'android.permission.health.WRITE_HEART_RATE',
   'android.permission.health.WRITE_HEIGHT',
-  // WRITE_HYDRATION moved to the base androidPermissions list (writeback feature).
   'android.permission.health.WRITE_LEAN_BODY_MASS',
   'android.permission.health.WRITE_INTERMENSTRUAL_BLEEDING',
   'android.permission.health.WRITE_MENSTRUATION',
@@ -108,28 +106,23 @@ const devAndroidPermissions = [
   'android.permission.health.WRITE_WHEELCHAIR_PUSHES',
 ];
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const packageJson = require('./package.json');
+const packageJson = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf8')
+);
 
-export default ({ config }: ConfigContext): Partial<ExpoConfig> => {
+export default ({ config }) => {
   const environment = process.env.APP_VARIANT || 'dev';
-
   const isDev = environment === 'dev' || environment === 'development';
+  if (isDev) androidPermissions.push(...devAndroidPermissions);
 
-  if (isDev) {
-    androidPermissions.push(...devAndroidPermissions);
-  }
-
-  // Plugins only included in production builds
   const prodPlugins = ['./plugins/withNetworkSecurityConfig'];
-
   return {
     ...config,
     name: APP_NAME,
     slug: APP_SLUG,
     version: packageJson.version,
     locales: Object.fromEntries(
-      nativeLanguageTags().map((language) => [
+      NATIVE_LANGUAGE_TAGS.map((language) => [
         language,
         `./locales/${language}.json`,
       ])
@@ -143,23 +136,13 @@ export default ({ config }: ConfigContext): Partial<ExpoConfig> => {
       infoPlist: {
         NSLocalNetworkUsageDescription:
           'SparkyFitness connects to self-hosted servers on your local network.',
-        // Required by the food/meal photo picker and the label/barcode
-        // scanner. iOS terminates the app on first use without these, and App
-        // Review rejects a binary that requests either without a purpose
-        // string.
         NSCameraUsageDescription:
           'SparkyFitness uses the camera to photograph foods and meals, and to scan barcodes and nutrition labels.',
         NSPhotoLibraryUsageDescription:
           'SparkyFitness lets you choose photos from your library for your foods, meals, and diary entries.',
-        NSAppTransportSecurity: {
-          NSAllowsArbitraryLoads: false,
-        },
+        NSAppTransportSecurity: { NSAllowsArbitraryLoads: false },
         ITSAppUsesNonExemptEncryption: false,
-        // Keep the native per-app Language entry visible in iOS Settings even
-        // when the device has only one preferred system language.
         UIPrefersShowingLanguageSettings: true,
-        // The localized InfoPlist permission strings come from `locales`; this
-        // allows the generated app metadata to use the selected localization.
         CFBundleAllowMixedLocalizations: true,
       },
       entitlements: {
@@ -179,8 +162,6 @@ export default ({ config }: ConfigContext): Partial<ExpoConfig> => {
       ...(config.plugins ?? []),
       'expo-image',
       [
-        // Foreground playback only (rest-timer chime): no mic permission, no
-        // background-audio mode, no Android record/foreground-service perms.
         'expo-audio',
         {
           microphonePermission: false,
@@ -197,8 +178,8 @@ export default ({ config }: ConfigContext): Partial<ExpoConfig> => {
         'expo-localization',
         {
           supportedLocales: {
-            ios: nativeLanguageTags(),
-            android: nativeLanguageTags(),
+            ios: NATIVE_LANGUAGE_TAGS,
+            android: NATIVE_LANGUAGE_TAGS,
           },
         },
       ],
@@ -211,9 +192,6 @@ export default ({ config }: ConfigContext): Partial<ExpoConfig> => {
             (isDev
               ? `${DEV_BUNDLE_IDENTIFIER}.ExpoWidgetsTarget`
               : 'com.SparkyApps.SparkyFitnessMobile.ExpoWidgetsTarget'),
-          // Live Activities register at runtime via createLiveActivity and must
-          // NOT be listed here — widgets[] is only for home/Lock Screen widgets
-          // (an entry without supportedFamilies breaks the generated target).
           widgets: [],
         },
       ],
@@ -223,9 +201,6 @@ export default ({ config }: ConfigContext): Partial<ExpoConfig> => {
       ...config.extra,
       APP_VARIANT: environment,
       iosAppGroup: getIosAppGroup(),
-      eas: {
-        projectId: '498a86c5-344f-4d2c-9033-dfd720e4a383',
-      },
     },
   };
 };
