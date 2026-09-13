@@ -1,5 +1,9 @@
 import { z } from 'zod/v4';
-import { isDayString } from '@workspace/shared';
+import {
+  isDayString,
+  MIN_MEASURED_BMR_KCAL,
+  MAX_MEASURED_BMR_KCAL,
+} from '@workspace/shared';
 
 const coerceLegacyNumber = (value: unknown) => {
   if (typeof value !== 'string') {
@@ -92,13 +96,25 @@ const boundedNullableOptionalLegacyNumber = (min: number, max: number) =>
 // numeric(5,2) columns, so 999.99 is the largest storable mass.
 const smartScaleMassKg = boundedNullableOptionalLegacyNumber(0, 999.99);
 const percentage = boundedNullableOptionalLegacyNumber(0, 100);
-// numeric(6,1) column for BMR kcal (300 to 10000 kcal).
-const smartScaleBmrKcal = boundedNullableOptionalLegacyNumber(300, 10000);
+// numeric(6,1) column for BMR kcal. Bounds are shared with every consumer that
+// decides whether a measured BMR may replace the formula estimate.
+const smartScaleBmrKcal = boundedNullableOptionalLegacyNumber(
+  MIN_MEASURED_BMR_KCAL,
+  MAX_MEASURED_BMR_KCAL
+);
 
 export const UpsertWaterIntakeBodySchema = z
   .object({
     entry_date: requiredLegacyString('entry_date'),
-    change_drinks: requiredLegacyNumber,
+    // Bounded and integral because upsertWaterIntake loops once per drink, and
+    // since #2115 a single iteration can also insert a food_entries row. An
+    // unbounded (or fractional) value turned one request into an unbounded
+    // serial write loop. 100 presses of "+" in one call is already far past
+    // anything the UI issues.
+    change_drinks: z.preprocess(
+      coerceLegacyNumber,
+      z.number().int().min(-100).max(100)
+    ),
     container_id: nullableOptionalLegacyNumber,
     user_id: optionalLegacyString,
   })
@@ -264,6 +280,22 @@ export const CustomMeasurementsRangeParamSchema = z
 
 export type CustomMeasurementsRangeParam = z.infer<
   typeof CustomMeasurementsRangeParamSchema
+>;
+
+/**
+ * Query params for the "latest manual custom value per category on or before a
+ * date" lookup. The day is validated as a real calendar day rather than only a
+ * non-empty string (as `DateParamSchema` does), so a malformed value is a 400
+ * here instead of a database error surfacing as a 500.
+ */
+export const LatestCustomEntryQuerySchema = z
+  .object({
+    date: requiredDayString('date'),
+  })
+  .loose();
+
+export type LatestCustomEntryQuery = z.infer<
+  typeof LatestCustomEntryQuerySchema
 >;
 
 export const UpdateWaterIntakeLogTimeBodySchema = z

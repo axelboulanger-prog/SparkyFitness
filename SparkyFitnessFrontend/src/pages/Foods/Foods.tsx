@@ -180,8 +180,11 @@ const FoodDatabaseManager = () => {
   const handleBulkDeleteConfirm = async () => {
     try {
       await Promise.all(
+        // 'delete', never 'delete_with_history': a bulk tidy-up of the library
+        // must not quietly destroy logged entries. This used to force-delete
+        // every selected food with no warning at all.
         Array.from(selectedIds).map((id) =>
-          deleteFood({ foodId: id, force: true })
+          deleteFood({ foodId: id, mode: 'delete' })
         )
       );
     } catch (err) {
@@ -710,6 +713,10 @@ const FoodDatabaseManager = () => {
         onOpenChange={setShowBulkDeleteDialog}
         selectedCount={selectedCount}
         entityName={t('foodDatabaseManager.foods', 'foods')}
+        description={t('foodDatabaseManager.bulkDeleteDescription', {
+          count: selectedCount,
+          defaultValue: `Remove these ${selectedCount} foods from your library and from any meals and meal plans. Entries you have already logged are kept in your diary.`,
+        })}
         onConfirm={handleBulkDeleteConfirm}
       />
 

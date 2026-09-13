@@ -16,8 +16,10 @@ import {
   DateRangeParamSchema,
   StrictDateRangeParamSchema,
   CustomMeasurementsRangeParamSchema,
+  LatestCustomEntryQuerySchema,
   ImportHealthDataBodySchema,
 } from '../schemas/measurementSchemas.js';
+import { isDayString } from '@workspace/shared';
 import { canAccessUserData } from '../utils/permissionUtils.js';
 import { clearUserTdeeCache } from '../services/AdaptiveTdeeService.js';
 const router = express.Router();
@@ -1354,6 +1356,66 @@ router.delete(
 );
 /**
  * @swagger
+ * /measurements/custom-entries/latest-manual-on-or-before-date:
+ *   get:
+ *     summary: Get the latest manual custom value per category on or before a date
+ *     tags: [Wellness & Metrics]
+ *     security:
+ *       - cookieAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: date
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: >-
+ *           Calendar day (YYYY-MM-DD). Each category resolves to its most recent
+ *           manual value on or before this day.
+ *     responses:
+ *       200:
+ *         description: >-
+ *           At most one entry per category. Categories with no manual value on
+ *           or before the date are omitted entirely.
+ *       400:
+ *         description: The date query parameter was missing or not a valid YYYY-MM-DD day.
+ *       403:
+ *         description: Forbidden (lacks checkin_read permission for the target user).
+ */
+// Registered before /custom-entries/:date so the literal segment is not
+// swallowed by the date parameter route.
+router.get(
+  '/custom-entries/latest-manual-on-or-before-date',
+  authenticate,
+  checkPermissionMiddleware('checkin'),
+  async (req, res, next) => {
+    const queryResult = LatestCustomEntryQuerySchema.safeParse(req.query);
+    if (!queryResult.success) {
+      return res.status(400).json({
+        error: queryResult.error.issues.map((i) => i.message).join(', '),
+      });
+    }
+    const { date } = queryResult.data;
+    try {
+      const entries =
+        await measurementService.getLatestManualCustomEntriesOnOrBeforeDate(
+          req.originalUserId || req.userId,
+          req.userId,
+          date
+        );
+      res.status(200).json(entries);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
  * /measurements/custom-entries/{date}:
  *   get:
  *     summary: Get custom measurement entries for a specific date
@@ -1669,9 +1731,21 @@ router.get(
  *         schema:
  *           type: string
  *         description: weight, steps, body_fat_percentage, etc.
+ *       - in: query
+ *         name: date
+ *         required: false
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: >-
+ *           Restrict the lookup to this single day (YYYY-MM-DD) instead of
+ *           returning the newest value ever recorded. Used for measured BMR,
+ *           which only applies on the day it was taken.
  *     responses:
  *       200:
  *         description: The most recent measurement.
+ *       400:
+ *         description: The date query parameter was present but not a valid YYYY-MM-DD day.
  */
 router.get(
   '/most-recent/:measurementType',
@@ -1679,10 +1753,27 @@ router.get(
   checkPermissionMiddleware('checkin'),
   async (req, res, next) => {
     const { measurementType } = req.params;
+    // Optional `?date=YYYY-MM-DD` pins the lookup to that single day instead of
+    // returning the newest value ever recorded. The Diary uses it for BMR, which
+    // is only meaningful on the day it was measured.
+    //
+    // A malformed date is rejected rather than ignored: silently dropping it would
+    // fall back to "newest ever", which for BMR is exactly the carry-forward this
+    // change removes — and the caller would get it with a 200 and no signal.
+    const rawDate = req.query.date;
+    if (rawDate !== undefined) {
+      if (typeof rawDate !== 'string' || !isDayString(rawDate)) {
+        return res
+          .status(400)
+          .json({ error: 'date must be a valid YYYY-MM-DD day string.' });
+      }
+    }
+    const onDate = typeof rawDate === 'string' ? rawDate : undefined;
     try {
       const measurement = await measurementService.getMostRecentMeasurement(
         req.userId,
-        measurementType
+        measurementType,
+        onDate
       );
       res.status(200).json(measurement);
     } catch (error) {
