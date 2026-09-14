@@ -1,0 +1,21 @@
+name: Auto Sync Fork
+
+on:
+  schedule:
+    # S'exécute tous les jours à minuit (heure UTC)
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Permet aussi de le lancer manuellement via un bouton
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync avec le dépôt original
+        run: |
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            /repos/${{ github.repository }}/merge-upstream \
+            -f branch="main"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
