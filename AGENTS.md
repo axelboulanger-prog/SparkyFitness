@@ -33,7 +33,7 @@ For `docs/` and `SparkyFitnessGarmin/`, there is no package-level `AGENTS.md`. `
 
 - `SparkyFitnessFrontend/` - React 19 + Vite web app.
 - `SparkyFitnessServer/` - Express 5 + PostgreSQL backend API.
-- `SparkyFitnessMobile/` - Expo SDK 56 / React Native 0.85 app.
+- `SparkyFitnessMobile/` - Expo SDK 57 / React Native 0.86 app.
 - `shared/` - source-first TypeScript workspace package for `@workspace/shared` schemas, constants, and timezone/day helpers.
 - `docs/` - Nuxt / Docus docs site.
 - `SparkyFitnessGarmin/` - standalone Python integration service outside the current `pnpm` workspace.

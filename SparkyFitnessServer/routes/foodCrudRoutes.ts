@@ -1204,7 +1204,9 @@ router.delete('/:id', authenticate, async (req, res, next) => {
  *         description: Food data is required.
  */
 router.post('/import-from-csv', authenticate, async (req, res, next) => {
-  const { foods, overwrite } = req.body;
+  // req.body is undefined for a non-JSON content-type; default to {} so a
+  // malformed request hits the 400 below instead of a raw destructure 500.
+  const { foods, overwrite } = req.body ?? {};
   if (!foods) {
     return res.status(400).json({ error: 'Food data is required.' });
   }

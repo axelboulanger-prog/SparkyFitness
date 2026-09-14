@@ -621,8 +621,7 @@ router.put('/sparky-chat-history/:id', authenticate, async (req, res, next) => {
     }
     if (
       // @ts-expect-error TS(2571): Object is of type 'unknown'.
-      error.message ===
-      'Chat history entry not found or not authorized to update.'
+      error.message.startsWith('Chat history entry not found')
     ) {
       // @ts-expect-error TS(2571): Object is of type 'unknown'.
       return res.status(404).json({ error: error.message });
@@ -681,8 +680,7 @@ router.delete(
       }
       if (
         // @ts-expect-error TS(2571): Object is of type 'unknown'.
-        error.message ===
-        'Chat history entry not found or not authorized to delete.'
+        error.message.startsWith('Chat history entry not found')
       ) {
         // @ts-expect-error TS(2571): Object is of type 'unknown'.
         return res.status(404).json({ error: error.message });

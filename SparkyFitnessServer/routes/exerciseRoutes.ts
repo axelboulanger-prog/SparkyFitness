@@ -7,7 +7,7 @@ import wgerService from '../integrations/wger/wgerService.js';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { ExternalProviderType } from 'types/externalProvider.ts';
+import { ExternalProviderType } from '../types/externalProvider.js';
 import {
   exerciseWriteArrayFieldsSchema,
   type ExerciseWriteArrayFields,

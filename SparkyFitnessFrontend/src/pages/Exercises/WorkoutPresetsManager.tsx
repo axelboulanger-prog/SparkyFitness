@@ -53,6 +53,7 @@ import BulkDeleteDialog from '@/components/BulkDeleteDialog';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DataTable } from '@/components/ui/DataTable';
 import { ColumnDef, RowSelectionState } from '@tanstack/react-table';
+import { type DataTableFeatures } from '@/components/ui/dataTableFeatures';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Badge } from '@/components/ui/badge';
 
@@ -271,7 +272,7 @@ const WorkoutPresetsManager = () => {
     [location.pathname, location.search, navigate, t]
   );
 
-  const columns = React.useMemo<ColumnDef<WorkoutPreset>[]>(
+  const columns = React.useMemo<ColumnDef<DataTableFeatures, WorkoutPreset>[]>(
     () => [
       {
         id: 'select',

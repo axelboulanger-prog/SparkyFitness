@@ -2,6 +2,7 @@ import { vi, beforeEach, describe, expect, it } from 'vitest';
 import { buildDashboardTools } from '../ai/tools/dashboardTools.js';
 import dashboardService from '../services/DashboardService.js';
 import { todayInZone } from '@workspace/shared';
+import { toolOpts } from './helpers/toolExecutionOptions.js';
 
 vi.mock('../services/DashboardService.js', () => ({
   default: {
@@ -16,7 +17,7 @@ const svc = dashboardService as unknown as {
   getDashboardStats: ReturnType<typeof vi.fn>;
 };
 
-const opts = { toolCallId: 'tc-1', messages: [] };
+const opts = toolOpts;
 const DB_ERROR_TEXT =
   'Error [DB_ERROR]: A database error occurred.\n\nSuggestion: Do NOT retry the same call — it will fail the same way. Tell the user what failed and stop.';
 

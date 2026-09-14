@@ -63,6 +63,7 @@ import BulkDeleteDialog from '@/components/BulkDeleteDialog';
 import DeleteExerciseDialog from './DeleteExerciseDialog';
 import { DataTable } from '@/components/ui/DataTable';
 import { ColumnDef, RowSelectionState } from '@tanstack/react-table';
+import { type DataTableFeatures } from '@/components/ui/dataTableFeatures';
 import { Checkbox } from '@/components/ui/checkbox';
 import { getEnergyUnitString } from '@/utils/nutritionCalculations';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -215,7 +216,7 @@ const ExerciseDatabaseManager = () => {
   const totalExercisesCount = data ? data.totalCount : 0;
   const totalPages = Math.ceil(totalExercisesCount / itemsPerPage);
 
-  const columns = useMemo<ColumnDef<ExerciseInterface>[]>(
+  const columns = useMemo<ColumnDef<DataTableFeatures, ExerciseInterface>[]>(
     () => [
       {
         id: 'select',

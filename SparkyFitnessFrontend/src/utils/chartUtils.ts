@@ -4,6 +4,7 @@
  * Addresses Issue #144: Improve plot readability
  */
 
+import type { ReactNode } from 'react';
 import type { MouseHandlerDataParam, TickItem, XAxisProps } from 'recharts';
 import type { ChartScaleMode } from '@workspace/shared';
 
@@ -490,4 +491,18 @@ export function createTimeSyncMethod(): TimeSyncMethod {
     // dated ticks; returning 0 would light up an unrelated first point.
     return closestIndex;
   };
+}
+
+/**
+ * recharts 3.10 types the `labelFormatter` parameter of `Tooltip` as
+ * `ReactNode`, but at runtime it is handed the axis value. These narrow it back
+ * so charts can keep doing date and number formatting with it.
+ */
+export function axisLabelValue(label: ReactNode): string | number {
+  return typeof label === 'string' || typeof label === 'number' ? label : '';
+}
+
+/** As {@link axisLabelValue}, for formatters that accept `string | Date`. */
+export function axisLabelText(label: ReactNode): string {
+  return typeof label === 'string' ? label : String(axisLabelValue(label));
 }

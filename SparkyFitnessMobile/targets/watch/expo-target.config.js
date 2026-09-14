@@ -68,7 +68,7 @@ module.exports = (config) => {
 
   return {
     type: 'watch',
-    name: 'SparkyFitness Watch',
+    name: 'SparkyFitnessWatch',
     bundleIdentifier,
     // Reuses the phone app's adaptive icon for now — swap for a dedicated
     // Watch icon (has its own required sizes) once the design is settled.

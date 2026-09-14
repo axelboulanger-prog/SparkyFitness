@@ -63,6 +63,7 @@ import {
   RowSelectionState,
   CellContext,
 } from '@tanstack/react-table';
+import { type DataTableFeatures } from '@/components/ui/dataTableFeatures';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
   getNutrientMetadata,
@@ -230,7 +231,7 @@ const FoodDatabaseManager = () => {
   // One viewer for the whole table; the clicked row supplies its own images.
   const { lightboxProps, openLightbox } = useImageLightbox();
 
-  const columns = useMemo<ColumnDef<Food>[]>(
+  const columns = useMemo<ColumnDef<DataTableFeatures, Food>[]>(
     () => [
       {
         id: 'select',
@@ -373,7 +374,7 @@ const FoodDatabaseManager = () => {
               ] as number) || 0
             );
           },
-          cell: (info: CellContext<Food, unknown>) => (
+          cell: (info: CellContext<DataTableFeatures, Food, unknown>) => (
             <div className="text-center">
               <span className={`font-medium ${meta.color}`}>
                 {formatNutrientValue(

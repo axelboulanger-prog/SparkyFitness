@@ -40,7 +40,7 @@ import {
   muscleNameMap,
   equipmentNameMap,
 } from '../integrations/wger/wgerNameMapping.js';
-import { ExternalProviderType } from 'types/externalProvider.ts';
+import { ExternalProviderType } from '../types/externalProvider.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

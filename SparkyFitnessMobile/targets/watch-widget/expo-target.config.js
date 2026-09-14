@@ -53,7 +53,7 @@ module.exports = (config) => {
     // WidgetKit/SwiftUI and (per its own default) reuses the app's App Group,
     // which the explicit `entitlements` below makes unambiguous.
     type: 'watch-widget',
-    name: 'SparkyFitness Watch Widget',
+    name: 'SparkyFitnessWatchWidget',
     // Convention: "<watch-app-bundle-id>.watch-widget", same relationship
     // targets/widget has to the phone app.
     bundleIdentifier: isDev

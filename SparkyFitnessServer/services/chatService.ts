@@ -328,8 +328,10 @@ async function updateSparkyChatHistoryEntry(
   updateData: SparkyChatHistoryMutator
 ) {
   try {
-    // @ts-expect-error TS(2554): Expected 2 arguments, but got 1.
-    const entryOwnerId = await chatRepository.getChatHistoryEntryOwnerId(id);
+    const entryOwnerId = await chatRepository.getChatHistoryEntryOwnerId(
+      id,
+      authenticatedUserId
+    );
     if (!entryOwnerId) {
       throw new Error('Chat history entry not found.');
     }
@@ -364,8 +366,10 @@ async function deleteSparkyChatHistoryEntry(
   id: string
 ) {
   try {
-    // @ts-expect-error TS(2554): Expected 2 arguments, but got 1.
-    const entryOwnerId = await chatRepository.getChatHistoryEntryOwnerId(id);
+    const entryOwnerId = await chatRepository.getChatHistoryEntryOwnerId(
+      id,
+      authenticatedUserId
+    );
     if (!entryOwnerId) {
       throw new Error('Chat history entry not found.');
     }
