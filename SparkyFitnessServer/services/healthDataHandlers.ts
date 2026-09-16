@@ -805,12 +805,25 @@ const stepsHandler: HealthTypeHandler = {
 const waterHandler: HealthTypeHandler = {
   async handle(entry, ctx) {
     const { source = 'manual' } = entry;
-    const waterValue = parseInt(entry.value, 10);
-    if (isNaN(waterValue) || !Number.isInteger(waterValue)) {
+    if (
+      entry.value === null ||
+      entry.value === undefined ||
+      String(entry.value).trim() === ''
+    ) {
       return {
         status: 'error',
-        error: 'Invalid value for water. Must be an integer.',
+        error: 'Invalid value for water. Must be a valid number.',
       };
+    }
+    const waterValue = Number(entry.value);
+    if (!Number.isFinite(waterValue) || isNaN(waterValue)) {
+      return {
+        status: 'error',
+        error: 'Invalid value for water. Must be a valid number.',
+      };
+    }
+    if (waterValue <= 0) {
+      return { status: 'success', data: null };
     }
     const result = await measurementRepository.upsertWaterData(
       ctx.userId,
@@ -839,13 +852,29 @@ const waterHandler: HealthTypeHandler = {
     for (let i = 0; i < entries.length; i++) {
       const item = entries[i];
       const source = (item.entry.source as string) || 'manual';
-      const waterValue = Number(item.entry.value);
-      // Match handle()'s validation (accepts 0 and negative integers, rejects
-      // non-integers) so the same payload behaves identically on both paths.
-      if (!Number.isInteger(waterValue)) {
+      if (
+        item.entry.value === null ||
+        item.entry.value === undefined ||
+        String(item.entry.value).trim() === ''
+      ) {
         outcomes[i] = {
           status: 'error',
-          error: 'Invalid value for water. Must be an integer.',
+          error: 'Invalid value for water. Must be a valid number.',
+        };
+        continue;
+      }
+      const waterValue = Number(item.entry.value);
+      if (!Number.isFinite(waterValue) || isNaN(waterValue)) {
+        outcomes[i] = {
+          status: 'error',
+          error: 'Invalid value for water. Must be a valid number.',
+        };
+        continue;
+      }
+      if (waterValue <= 0) {
+        outcomes[i] = {
+          status: 'success',
+          data: null,
         };
         continue;
       }

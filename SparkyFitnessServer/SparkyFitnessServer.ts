@@ -82,8 +82,6 @@ import onboardingRoutes from './routes/onboardingRoutes.js';
 import customNutrientRoutes from './routes/customNutrientRoutes.js';
 import aiUnitConversionRoutes from './routes/aiUnitConversionRoutes.js';
 import allergenPreferenceRoutes from './routes/allergenPreferenceRoutes.js';
-import { applyMigrations } from './utils/dbMigrations.js';
-import { applyRlsPolicies } from './utils/applyRlsPolicies.js';
 import waterContainerRoutes from './routes/waterContainerRoutes.js';
 import waterIntakeRoutesV2 from './routes/v2/waterIntakeRoutes.js';
 import medicationRoutesV2 from './routes/v2/medicationRoutes.js';
@@ -235,15 +233,15 @@ app.use((req, res, next) => {
 });
 // External MCP endpoint — a self-contained chain mounted top-level (not /api)
 // to skip the /api/auth interceptor and cache-control middleware. It sits
-// before the global 50mb parser so its route-local 1mb parser wins (the global
+// before the global parser so its route-local parser wins (the global
 // parser would set req._body first and no-op the local one). cookieParser is
-// local because the global one also runs after the 50mb parser, and
+// local because the global one also runs after the global parser, and
 // authenticate reads req.cookies. requestLogger is local because the global
 // one also runs after this mount, so /mcp requests would never reach it.
 app.use(
   '/mcp',
   requestLogger({ logCompletion: true }),
-  express.json({ limit: '1mb' }),
+  express.json({ limit: isDemoMode() ? '1mb' : '50mb' }),
   cookieParser(),
   authenticate,
   // /mcp mounts ahead of the global route table, so it needs the demo guard
@@ -256,13 +254,11 @@ app.use(
 // takes a much lower cap: the routes that need the headroom (image analysis,
 // uploads, FIT import) are blocked for the demo account anyway, and a 50mb
 // parse per request is a cheap way for an anonymous visitor to burn memory.
-app.use(express.json({ limit: isDemoMode() ? '2mb' : '50mb' }));
+app.use(express.json({ limit: isDemoMode() ? '1mb' : '50mb' }));
 app.use(cookieParser());
 // --- Better Auth Mounting Logic (Moved to after migrations) ---
-// @ts-expect-error TS7034
-let syncTrustedProviders;
-// @ts-expect-error TS7034
-let betterAuthHandlerInstance = null;
+let syncTrustedProviders: typeof authModule.syncTrustedProviders | undefined;
+let betterAuthHandlerInstance: ReturnType<typeof toNodeHandler> | null = null;
 const mountBetterAuth = () => {
   try {
     console.log('[AUTH] Starting Better Auth mounting phase...');
@@ -277,7 +273,6 @@ const mountBetterAuth = () => {
 };
 // Catch ALL requests starting with /api/auth early.
 app.use(async (req, res, next) => {
-  // @ts-expect-error TS7005
   if (req.originalUrl.startsWith('/api/auth') && betterAuthHandlerInstance) {
     // 1. Skip interceptor for discovery routes - let them fall through to authRoutes.js
     const isDiscovery =
@@ -1029,101 +1024,125 @@ const scheduleHevySyncs = async () => {
     }
   });
 };
-applyMigrations()
-  .then(applyRlsPolicies)
-  .then(async () => {
-    // Upsert OIDC provider from env when SPARKY_FITNESS_OIDC_ISSUER_URL + CLIENT_ID + SECRET + PROVIDER_SLUG are set
+// Migrations and RLS policies are applied by index.ts before this module is
+// imported, so that Better Auth's eager schema validation (run at auth.ts
+// module scope) sees the migrated schema. Do not move them back in here.
+(async () => {
+  // Upsert OIDC provider from env when SPARKY_FITNESS_OIDC_ISSUER_URL + CLIENT_ID + SECRET + PROVIDER_SLUG are set
+  try {
+    await upsertEnvOidcProvider();
+  } catch (err) {
+    log('error', 'OIDC env provider upsert failed:', err);
+  }
+  mountBetterAuth();
+  // Sync trusted SSO providers after database is ready (so Better Auth sees env-upserted and DB providers)
+  if (syncTrustedProviders) {
+    await syncTrustedProviders().catch((err: unknown) =>
+      console.error('[AUTH] Post-init SSO sync failed:', err)
+    );
+  }
+  scheduleBackupsOnStartup();
+  await scheduleOpenFoodFactsAutoSyncOnStartup();
+  scheduleSessionCleanup();
+  scheduleWithingsSyncs();
+  scheduleGarminSyncs();
+  scheduleFitbitSyncs();
+  scheduleOuraSyncs();
+  schedulePolarSyncs();
+  scheduleStravaSyncs();
+  scheduleGoogleHealthSyncs();
+  scheduleHevySyncs();
+  if (process.env.SPARKY_FITNESS_ADMIN_EMAIL) {
+    // A demo account promoted to admin would hand every anonymous visitor the
+    // admin panel. Refuse the promotion rather than start up compromised.
+    if (isDemoMode() && isDemoEmail(process.env.SPARKY_FITNESS_ADMIN_EMAIL)) {
+      throw new Error(
+        `SPARKY_FITNESS_ADMIN_EMAIL matches the demo account (${getDemoEmail()}). ` +
+          'Refusing to grant admin to the public demo user — use a different admin address.'
+      );
+    }
+    const adminUser = await userRepository.findUserByEmail(
+      process.env.SPARKY_FITNESS_ADMIN_EMAIL
+    );
+    if (adminUser) await userRepository.updateUserRole(adminUser.id, 'admin');
+  }
+  if (process.env.SPARKY_FITNESS_DEMO_MODE === 'true') {
     try {
-      await upsertEnvOidcProvider();
+      await seedDemoUser();
+      scheduleDemoMidnightReset();
     } catch (err) {
-      log('error', 'OIDC env provider upsert failed:', err);
+      log('error', '[DEMO] Demo mode initialization failed:', err);
     }
-    mountBetterAuth();
-    // Sync trusted SSO providers after database is ready (so Better Auth sees env-upserted and DB providers)
-    // @ts-expect-error TS7005
-    if (syncTrustedProviders) {
-      // @ts-expect-error TS7006
-      await syncTrustedProviders().catch((err) =>
-        console.error('[AUTH] Post-init SSO sync failed:', err)
-      );
+  } else {
+    try {
+      await purgeDemoUserIfExists();
+    } catch (err) {
+      log('error', '[DEMO] Demo auto-purge check failed:', err);
     }
-    scheduleBackupsOnStartup();
-    await scheduleOpenFoodFactsAutoSyncOnStartup();
-    scheduleSessionCleanup();
-    scheduleWithingsSyncs();
-    scheduleGarminSyncs();
-    scheduleFitbitSyncs();
-    scheduleOuraSyncs();
-    schedulePolarSyncs();
-    scheduleStravaSyncs();
-    scheduleGoogleHealthSyncs();
-    scheduleHevySyncs();
-    if (process.env.SPARKY_FITNESS_ADMIN_EMAIL) {
-      // A demo account promoted to admin would hand every anonymous visitor the
-      // admin panel. Refuse the promotion rather than start up compromised.
-      if (isDemoMode() && isDemoEmail(process.env.SPARKY_FITNESS_ADMIN_EMAIL)) {
-        throw new Error(
-          `SPARKY_FITNESS_ADMIN_EMAIL matches the demo account (${getDemoEmail()}). ` +
-            'Refusing to grant admin to the public demo user — use a different admin address.'
-        );
-      }
-      const adminUser = await userRepository.findUserByEmail(
-        process.env.SPARKY_FITNESS_ADMIN_EMAIL
-      );
-      if (adminUser) await userRepository.updateUserRole(adminUser.id, 'admin');
-    }
-    if (process.env.SPARKY_FITNESS_DEMO_MODE === 'true') {
-      try {
-        await seedDemoUser();
-        scheduleDemoMidnightReset();
-      } catch (err) {
-        log('error', '[DEMO] Demo mode initialization failed:', err);
-      }
-    } else {
-      try {
-        await purgeDemoUserIfExists();
-      } catch (err) {
-        log('error', '[DEMO] Demo auto-purge check failed:', err);
-      }
-    }
-    const server = app.listen(PORT, () => {
-      console.log(`DEBUG: Server started and listening on port ${PORT}`);
-      log('info', `SparkyFitnessServer listening on port ${PORT}`);
-      console.log('View API documentation at: /api/api-docs/swagger');
-    });
-    // Fix for reverse proxies using HTTP keepalive (e.g. Traefik, Caddy)
-    server.keepAliveTimeout = 181000; // Must be > proxy's idle timeout (nginx=75s, traefik=default 180s)
-    server.headersTimeout = 182000; // Must be slightly > keepAliveTimeout
-    // Graceful shutdown
-    let shuttingDown = false;
-    // @ts-expect-error TS7006
-    const shutdown = async (signal) => {
-      if (shuttingDown) return;
-      shuttingDown = true;
-      log('info', `${signal} received, shutting down gracefully...`);
-      server.close(async () => {
-        log('info', 'HTTP server closed, draining database pools...');
-        try {
-          await endPool();
-          log('info', 'Database pools closed. Exiting.');
-        } catch (err) {
-          log('error', 'Error closing database pools:', err);
-        }
-        // eslint-disable-next-line n/no-process-exit
-        process.exit(0);
-      });
-      // Force exit if graceful shutdown takes too long
-      setTimeout(() => {
-        log('error', 'Graceful shutdown timed out after 15s, forcing exit.');
-        // eslint-disable-next-line n/no-process-exit
-        process.exit(1);
-      }, 15000).unref();
+  }
+  const server = app.listen(PORT);
+  // A binding failure (EADDRINUSE, EACCES) arrives as the server's 'error'
+  // event, not as a rejection of this chain. Left unhandled it terminates the
+  // process before the catch below can drain the pools, so bridge the two
+  // events into the promise. Both listeners are removed once one fires: a
+  // lingering 'error' listener would swallow later runtime errors that should
+  // still surface.
+  await new Promise<void>((resolve, reject) => {
+    const onListening = () => {
+      server.removeListener('error', onError);
+      resolve();
     };
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
-    process.on('SIGINT', () => shutdown('SIGINT'));
-  })
-  .catch((error) => {
-    console.error('Failed to start server:', error);
-    process.exitCode = 1;
+    const onError = (error: Error) => {
+      server.removeListener('listening', onListening);
+      reject(error);
+    };
+    server.once('listening', onListening);
+    server.once('error', onError);
   });
+  console.log(`DEBUG: Server started and listening on port ${PORT}`);
+  log('info', `SparkyFitnessServer listening on port ${PORT}`);
+  console.log('View API documentation at: /api/api-docs/swagger');
+  // Fix for reverse proxies using HTTP keepalive (e.g. Traefik, Caddy)
+  server.keepAliveTimeout = 181000; // Must be > proxy's idle timeout (nginx=75s, traefik=default 180s)
+  server.headersTimeout = 182000; // Must be slightly > keepAliveTimeout
+  // Graceful shutdown
+  let shuttingDown = false;
+  // @ts-expect-error TS7006
+  const shutdown = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log('info', `${signal} received, shutting down gracefully...`);
+    server.close(async () => {
+      log('info', 'HTTP server closed, draining database pools...');
+      try {
+        await endPool();
+        log('info', 'Database pools closed. Exiting.');
+      } catch (err) {
+        log('error', 'Error closing database pools:', err);
+      }
+      // eslint-disable-next-line n/no-process-exit
+      process.exit(0);
+    });
+    // Force exit if graceful shutdown takes too long
+    setTimeout(() => {
+      log('error', 'Graceful shutdown timed out after 15s, forcing exit.');
+      // eslint-disable-next-line n/no-process-exit
+      process.exit(1);
+    }, 15000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+})().catch(async (error) => {
+  console.error('Failed to start server:', error);
+  // A failed boot must stop the process. Setting process.exitCode alone leaves
+  // a live container that never listens, which Docker's restart policy will
+  // not retry, so the deployment sits broken instead of restarting.
+  try {
+    await endPool();
+  } catch {
+    // Already failing; don't mask the original cause.
+  }
+  // eslint-disable-next-line n/no-process-exit
+  process.exit(1);
+});
 app.use(errorHandler);

@@ -29,7 +29,7 @@ const RESPONSE_SCHEMA: JsonSchemaNode = {
     meal_summary: {
       type: 'string',
       description:
-        "Brief one-line description of the meal as identified, e.g. 'Grilled chicken with rice and broccoli'",
+        "Short, concise title of the dish or meal (2-4 words max, e.g. 'Paneer Kadai', 'Chicken Alfredo Pasta', 'Grilled Salmon with Rice'). Do NOT write sentences, paragraphs, or list all side garnishes.",
     },
     overall_confidence: {
       type: 'string',
@@ -40,7 +40,7 @@ const RESPONSE_SCHEMA: JsonSchemaNode = {
     confidence_reason: {
       type: 'string',
       description:
-        "Short explanation of what drove the confidence rating, especially if medium or low. Mention specific uncertainties like 'sauce ingredients unclear' or 'portion depth not visible'.",
+        "Brief 1-sentence explanation of what drove the confidence rating, or empty string. Keep it concise (e.g. 'sauce ingredients unclear').",
     },
     items: {
       type: 'array',
@@ -339,6 +339,8 @@ Rules:
     because they are not visible. 0 is only correct when it is actually true
     (cholesterol in a plant food, trans fat in a whole food). Sodium in
     particular is rarely 0 in a seasoned, restaurant or processed dish.
+  - meal_summary MUST be a concise 2-4 word dish title (e.g. 'Paneer Kadai', 'Chicken Alfredo Pasta'). Never write sentences, paragraphs, or visual descriptions for meal_summary.
+  - Keep confidence_reason concise (1 short sentence maximum, or empty string).
   - Be explicit about assumptions (oil used, milk type, skin on/off).
   - Lower your confidence when portions are ambiguous or ingredients hidden.
   - Only ask clarifying questions that would materially change the estimate.`;
@@ -383,6 +385,26 @@ function resolveImages(input: EstimateFoodPhotoNutritionInput): PhotoImage[] {
 function ensureTotals(obj: Record<string, unknown>): Record<string, unknown> {
   if (Array.isArray(obj.items)) {
     const items = obj.items as Array<Record<string, unknown>>;
+    for (const item of items) {
+      if (typeof item === 'object' && item !== null) {
+        if (typeof item.assumptions === 'string') {
+          item.assumptions = item.assumptions.trim()
+            ? [item.assumptions.trim()]
+            : [];
+        } else if (!Array.isArray(item.assumptions)) {
+          item.assumptions = [];
+        }
+        if (!item.item_confidence) {
+          item.item_confidence = 'medium';
+        }
+        if (item.portion_description === undefined) {
+          item.portion_description = '';
+        }
+        if (item.preparation === undefined) {
+          item.preparation = '';
+        }
+      }
+    }
     if (!obj.totals || typeof obj.totals !== 'object') {
       let calories = 0;
       let protein = 0;
@@ -422,12 +444,16 @@ function ensureTotals(obj: Record<string, unknown>): Record<string, unknown> {
     if (obj.confidence_reason === undefined) {
       obj.confidence_reason = '';
     }
-    if (typeof obj.meal_summary !== 'string' && items.length > 0) {
-      obj.meal_summary =
+    if (typeof obj.meal_summary === 'string') {
+      obj.meal_summary = cleanMealSummary(obj.meal_summary);
+    } else if (items.length > 0) {
+      obj.meal_summary = cleanMealSummary(
         items
+          .slice(0, 3)
           .map((i) => String(i.name || ''))
           .filter(Boolean)
-          .join(', ') || 'Meal';
+          .join(', ') || 'Meal'
+      );
     }
   }
   return obj;
@@ -524,11 +550,61 @@ function titleCaseFoodName(value: string): string {
     .join('');
 }
 
+export function cleanMealSummary(summary?: string | null): string {
+  if (!summary || typeof summary !== 'string') return 'Meal';
+  let s = summary.trim();
+  // Remove markdown formatting / wrapping quotes
+  s = s.replace(/^["'`]+|["'`]+$/g, '').trim();
+  // If multiple sentences, take only the first sentence
+  const sentenceMatch = s.match(/^([^.!?\n]+)/);
+  if (sentenceMatch) {
+    s = sentenceMatch[1].trim();
+  }
+  // Strip leading articles like "A ", "An ", "The "
+  s = s.replace(/^(a|an|the)\s+/i, '');
+
+  // Strip narrative / visual descriptive clauses
+  s = s.replace(
+    /,\s*(featuring|garnished with|topped with|seasoned with|mixed with|served with|drizzled with|accompanied by|with a side of|in a|with chunks of).*/i,
+    ''
+  );
+
+  // If still long (> 40 chars) and contains " with ... and ...", simplify secondary sides
+  if (s.length > 40 && /\s+with\s+/i.test(s)) {
+    const parts = s.split(/\s+with\s+/i);
+    const mainDish = parts[0].trim();
+    if (mainDish.length >= 3) {
+      const sides = parts[1].split(/\s+and\s+/i);
+      if (sides.length > 1) {
+        if (mainDish.length > 25) {
+          s = mainDish;
+        } else {
+          s = `${mainDish} with ${sides[0].trim()}`;
+        }
+      }
+    }
+  }
+
+  // Limit word count to at most 4 words
+  const words = s.split(/\s+/);
+  if (words.length > 4) {
+    s = words.slice(0, 4).join(' ');
+  }
+
+  // Remove any trailing commas or punctuation
+  s = s.replace(/[,;:\s-]+$/, '').trim();
+  if (s.length > 0) {
+    s = s.charAt(0).toUpperCase() + s.slice(1);
+  }
+  return s || 'Meal';
+}
+
 function titleCaseItemNames(
   estimate: FoodPhotoEstimateResponse
 ): FoodPhotoEstimateResponse {
   return {
     ...estimate,
+    meal_summary: cleanMealSummary(estimate.meal_summary),
     items: estimate.items.map((item) => ({
       ...item,
       name: titleCaseFoodName(item.name),

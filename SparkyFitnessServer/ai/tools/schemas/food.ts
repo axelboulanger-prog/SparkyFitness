@@ -165,10 +165,16 @@ const createFoodSchema = z
       .describe(
         "Create a food. AI clients: you MUST search the web and populate as many micro-nutrients (fat details, fiber, sugar, sodium, potassium, calcium, iron, vitamins), GI classification, and brand ('Homemade' or 'Traditional' if generic) as possible rather than just core macros."
       ),
-    food_name: z.string().min(1).max(200).describe('Name of the new food item'),
+    food_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe(
+        'Short, concise food name (2-4 words max, e.g. "Chicken Burrito", "Greek Salad"). Do NOT write sentences or full visual descriptions in food_name.'
+      ),
     brand: z.string().max(200).optional().describe('Brand name of the food'),
     notes: notesSchema.describe(
-      'Optional markdown reference note about this food — preparation, how the user orders it, or a recipe. Only set it when the user actually supplied such detail; never invent one.'
+      'Optional markdown reference note for recipes, preparation details, or ingredients. Keep food_name short and put extra details here.'
     ),
     calories: z.coerce.number().min(0).describe('Calories (kcal)'),
     protein: z.coerce.number().min(0).describe('Protein (g)'),
@@ -264,6 +270,27 @@ const createFoodSchema = z
       .optional()
       .describe(
         'Iron (% Daily Value). MANDATORY: Estimate and populate based on typical food composition; do not default to 0/empty.'
+      ),
+    caffeine_mg: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Caffeine (mg) per serving_size. MANDATORY: Estimate and populate for coffee, tea, soda, energy drinks, and chocolate; do not default to 0/empty.'
+      ),
+    alcohol_g: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Alcohol / pure ethanol (g) per serving_size. MANDATORY: Estimate and populate for beer, wine, and spirits. Informational only — calories already include ethanol calories, so this is never added to the calorie total.'
+      ),
+    water_ml: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        "Water content (ml) per serving_size. Only set this for a solid or count-based food with meaningful water content — fruit, vegetables, soup, yogurt. Skip it when the food is already logged in a volume unit (ml, l, fl oz): the app credits that logged volume as water automatically, so setting this too would double it. Never guess for foods where water content isn't meaningful (bread, chips, meat)."
       ),
     gi: giIndexEnum
       .optional()
@@ -437,7 +464,7 @@ const updateFoodVariantSchema = z
     food_id: uuidSchema
       .optional()
       .describe(
-        'Food UUID. Used to find the default variant when variant_id is not provided.'
+        'Food UUID from search_food. Required unless variant_id is provided. Do not call update_food_variant with only nutrient fields.'
       ),
     variant_id: uuidSchema
       .optional()
@@ -528,6 +555,25 @@ const updateFoodVariantSchema = z
       .min(0)
       .optional()
       .describe('Updated iron (% Daily Value)'),
+    caffeine_mg: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated caffeine (mg) per serving_size'),
+    alcohol_g: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Updated alcohol / pure ethanol (g) per serving_size. Informational only — never added to calories.'
+      ),
+    water_ml: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Updated water content (ml) per serving_size. Skip when the food is logged in a volume unit (ml, l, fl oz) — that logged volume is already credited as water automatically.'
+      ),
     gi: giIndexEnum
       .optional()
       .describe('Updated Glycemic Index classification'),
@@ -578,14 +624,18 @@ const saveAsMealTemplateSchema = z
       .string()
       .min(1)
       .max(200)
-      .describe('Name for the new meal template'),
+      .describe(
+        'Short, concise name for the meal template (2-4 words max, e.g. "Chicken Rice Bowl")'
+      ),
     description: z
       .string()
       .max(1000)
       .optional()
-      .describe('Description for the meal template'),
+      .describe(
+        'Short tag or label (under 50 chars). Put recipe steps, instructions, or long details in notes, not description'
+      ),
     notes: notesSchema.describe(
-      'Optional markdown reference note for the meal template, e.g. a recipe. Only set it when the user actually supplied one.'
+      'Optional markdown reference note for the meal template (recipes, preparation instructions). Put detailed info here.'
     ),
   })
   .strict();
@@ -724,9 +774,14 @@ export const manageFoodInput = z.object({
     .string()
     .optional()
     .describe(
-      'Internal food UUID — alternative to food_name. NOT the External ID from lookup_food_nutrition results.'
+      'Internal food UUID — alternative to food_name. NOT the External ID from lookup_food_nutrition results. For update_food_variant, required: run search_food first and pass this id (no food_name fallback).'
     ),
-  variant_id: z.string().optional().describe('Food variant UUID'),
+  variant_id: z
+    .string()
+    .optional()
+    .describe(
+      'Food variant UUID. For update_food_variant, an alternative to food_id; one of the two is required.'
+    ),
   external_id: z
     .string()
     .max(100)
@@ -852,6 +907,27 @@ export const manageFoodInput = z.object({
   vitamin_c: z.coerce.number().min(0).optional().describe('Vitamin C (% DV)'),
   calcium: z.coerce.number().min(0).optional().describe('Calcium (% DV)'),
   iron: z.coerce.number().min(0).optional().describe('Iron (% DV)'),
+  caffeine_mg: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe(
+      'Caffeine (mg) — for create_food/update_food_variant, per serving_size'
+    ),
+  alcohol_g: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe(
+      'Alcohol / pure ethanol (g) — for create_food/update_food_variant, per serving_size. Informational only, never added to calories.'
+    ),
+  water_ml: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe(
+      'Water content (ml) — for create_food/update_food_variant, per serving_size. Skip when the food is logged in a volume unit (ml, l, fl oz); that logged volume is already credited as water automatically.'
+    ),
   gi: giIndexEnum.optional().describe('Glycemic index classification'),
   // entry / diary management
   entry_id: uuidSchema.optional().describe('Diary entry UUID'),

@@ -833,7 +833,8 @@ export async function estimateFoodPhoto(
   }
 
   const text = await response.text();
-  let code: FoodPhotoEstimateErrorCode = 'UPSTREAM_ERROR';
+  let code: FoodPhotoEstimateErrorCode =
+    response.status === 413 ? 'IMAGE_TOO_LARGE' : 'UPSTREAM_ERROR';
   let message = text;
   try {
     const parsed = JSON.parse(text);

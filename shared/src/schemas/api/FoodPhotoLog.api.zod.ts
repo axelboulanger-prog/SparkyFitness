@@ -123,6 +123,7 @@ export const foodPhotoLogRequestSchema = z
     meal_type_id: z.string().uuid().nullable().default(null),
     name: z.string().min(1).max(200),
     description: z.string().max(1000).nullable().default(null),
+    notes: z.string().max(2000).nullable().default(null).optional(),
     items: z.array(foodPhotoLogItemSchema).min(1).max(FOOD_PHOTO_LOG_MAX_ITEMS),
 
     /**

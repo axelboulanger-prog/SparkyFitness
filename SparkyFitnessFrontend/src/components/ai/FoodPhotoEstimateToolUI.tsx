@@ -56,11 +56,37 @@ export type SaveMode = 'ingredients_and_meal' | 'ingredients_only' | 'one_food';
 
 function cleanMealName(summary?: string | null): string {
   if (!summary) return 'Photo Meal';
-  let cleaned = summary.replace(/[.,;:]+$/, '').trim();
-  if (cleaned.length > 0) {
-    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  let s = summary.replace(/^["'`]+|["'`]+$/g, '').trim();
+  const sentenceMatch = s.match(/^([^.!?\n]+)/);
+  if (sentenceMatch && sentenceMatch[1]) {
+    s = sentenceMatch[1].trim();
   }
-  return cleaned || 'Photo Meal';
+  s = s.replace(/^(a|an|the)\s+/i, '');
+  s = s.replace(
+    /,\s*(featuring|garnished with|topped with|seasoned with|mixed with|served with|drizzled with|accompanied by|with a side of|in a|with chunks of).*/i,
+    ''
+  );
+  if (s.length > 40 && /\s+with\s+/i.test(s)) {
+    const parts = s.split(/\s+with\s+/i);
+    const mainDish = parts[0]?.trim();
+    const secondPart = parts[1];
+    if (mainDish && mainDish.length >= 3 && secondPart) {
+      const sides = secondPart.split(/\s+and\s+/i);
+      const firstSide = sides[0]?.trim();
+      if (sides.length > 1 && firstSide) {
+        s = mainDish.length > 25 ? mainDish : `${mainDish} with ${firstSide}`;
+      }
+    }
+  }
+  const words = s.split(/\s+/);
+  if (words.length > 4) {
+    s = words.slice(0, 4).join(' ');
+  }
+  s = s.replace(/[,;:\s-]+$/, '').trim();
+  if (s.length > 0) {
+    s = s.charAt(0).toUpperCase() + s.slice(1);
+  }
+  return s || 'Photo Meal';
 }
 
 // Only used while the user's meal types are still loading; once they arrive
@@ -322,7 +348,8 @@ export const FoodPhotoEstimateToolUI: ToolCallMessagePartComponent<
       meal_type: mealType,
       meal_type_id: null,
       name: mealName.trim() || 'Photo estimate',
-      description: estimate.confidence_reason || null,
+      description: null,
+      notes: estimate.confidence_reason || null,
       items,
       // The whole plate, all of it eaten. Splitting a dish into servings is
       // done in the Meal Builder, which logs through its own path.

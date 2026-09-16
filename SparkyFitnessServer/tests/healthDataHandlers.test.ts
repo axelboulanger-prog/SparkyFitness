@@ -295,6 +295,76 @@ describe('waterHandler.handleBatch', () => {
       containerName: 'Default',
     });
   });
+
+  it('skips 0 and negative water entries without inserting intake samples', async () => {
+    const outcomes = await waterHandler.handleBatch!(
+      [
+        prepared({ value: 0, source: 'garmin' }),
+        prepared({ value: -50, source: 'garmin' }),
+      ],
+      ctx
+    );
+
+    expect(outcomes).toEqual([
+      { status: 'success', data: null },
+      { status: 'success', data: null },
+    ]);
+    expect(
+      measurementRepository.upsertWaterIntakeSamples
+    ).not.toHaveBeenCalled();
+  });
+
+  it('accepts decimal water amounts from unit conversions', async () => {
+    const outcomes = await waterHandler.handleBatch!(
+      [prepared({ value: 709.764, source: 'garmin', source_id: 'garmin-1' })],
+      ctx
+    );
+
+    expect(outcomes[0].status).toBe('success');
+    expect(measurementRepository.upsertWaterIntakeSamples).toHaveBeenCalledWith(
+      'user-1',
+      'actor-1',
+      [
+        expect.objectContaining({
+          waterMl: 709.764,
+          source: 'garmin',
+        }),
+      ]
+    );
+  });
+
+  it('rejects blank and whitespace-only water values with an error', async () => {
+    const singleOutcome = await waterHandler.handle(
+      { value: '   ', type: 'water' },
+      {
+        userId: 'user-1',
+        actingUserId: 'actor-1',
+        parsedDate: '2026-08-03',
+      } as unknown as HealthEntryContext
+    );
+    expect(singleOutcome).toEqual({
+      status: 'error',
+      error: 'Invalid value for water. Must be a valid number.',
+    });
+
+    const batchOutcomes = await waterHandler.handleBatch!(
+      [
+        prepared({ value: '', source: 'garmin' }),
+        prepared({ value: '   ', source: 'garmin' }),
+      ],
+      ctx
+    );
+    expect(batchOutcomes).toEqual([
+      {
+        status: 'error',
+        error: 'Invalid value for water. Must be a valid number.',
+      },
+      {
+        status: 'error',
+        error: 'Invalid value for water. Must be a valid number.',
+      },
+    ]);
+  });
 });
 
 describe('bmrHandler.handleBatch', () => {

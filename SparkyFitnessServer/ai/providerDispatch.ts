@@ -150,11 +150,13 @@ type ProviderFamily = 'google' | 'openai' | 'anthropic' | 'ollama';
 // normalizeImagesForDispatch); the primary HEIC decision is made from the bytes.
 const HEIC_MIME_TYPES = new Set(['image/heic', 'image/heif']);
 
-// OpenAI-family providers that reliably support strict `response_format.json_schema`.
-// Others (openai_compatible/custom) fall back to `json_object` with the schema
-// embedded in the prompt, since arbitrary compatible servers may not support it.
+// OpenAI-family providers that support strict `response_format.json_schema`.
+// Modern compatible servers (LM Studio, vLLM, Ollama via /v1, OpenAI, Mistral, Groq, etc.)
+// require or prefer json_schema for structured outputs.
 const STRICT_SCHEMA_PROVIDERS = new Set([
   'openai',
+  'openai_compatible',
+  'custom',
   'mistral',
   'groq',
   'openrouter',
@@ -365,10 +367,22 @@ function truncateBody(body: string): string {
 }
 
 function stripCodeFences(content: string): string {
-  return content
-    .replace(/^```(?:json)?\n?/, '')
-    .replace(/\n?```$/, '')
-    .trim();
+  let text = content.trim();
+  // Strip reasoning blocks from models with internal thoughts (<think>...</think>, <thought>...</thought>)
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  text = text.replace(/<thought>[\s\S]*?<\/thought>/gi, '').trim();
+
+  // If the content is wrapped in markdown code fences, extract the inner block
+  const fencedMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fencedMatch) {
+    text = fencedMatch[1].trim();
+  } else {
+    text = text
+      .replace(/^```(?:json)?\n?/, '')
+      .replace(/\n?```$/, '')
+      .trim();
+  }
+  return text;
 }
 
 /**
@@ -1000,6 +1014,77 @@ function resolveTimeout(req: DispatchRequest, family: ProviderFamily): number {
   return DEFAULT_TIMEOUT_MS;
 }
 
+export function extractJsonCandidate(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Continue to balanced extraction
+  }
+
+  const candidates: unknown[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === '{' || char === '[') {
+      const openChar = char;
+      const closeChar = char === '{' ? '}' : ']';
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+
+      for (let j = i; j < text.length; j++) {
+        const c = text[j];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (c === '\\') {
+          escape = true;
+          continue;
+        }
+        if (c === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (!inString) {
+          if (c === openChar) {
+            depth++;
+          } else if (c === closeChar) {
+            depth--;
+            if (depth === 0) {
+              const snippet = text.slice(i, j + 1);
+              try {
+                const parsed = JSON.parse(snippet);
+                candidates.push(parsed);
+                i = j;
+              } catch {
+                // Ignore invalid candidate
+              }
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (candidates.length > 0) {
+    return candidates[candidates.length - 1];
+  }
+
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    return JSON.parse(text.slice(firstBrace, lastBrace + 1));
+  }
+  const firstBracket = text.indexOf('[');
+  const lastBracket = text.lastIndexOf(']');
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+    return JSON.parse(text.slice(firstBracket, lastBracket + 1));
+  }
+
+  throw new Error('No JSON structure found');
+}
+
 /**
  * Dispatch a single request to a user-configured AI provider and return a
  * normalized result. Attempts any `service_type` it has a builder for and
@@ -1177,7 +1262,8 @@ export async function dispatchAiRequest(
   }
 
   try {
-    const json = JSON.parse(stripCodeFences(extracted.text));
+    const cleaned = stripCodeFences(extracted.text);
+    const json = extractJsonCandidate(cleaned);
     return { ok: true, text: extracted.text, json };
   } catch {
     return {
@@ -1191,4 +1277,5 @@ export async function dispatchAiRequest(
 export default {
   dispatchAiRequest,
   toStrictJsonSchema,
+  extractJsonCandidate,
 };

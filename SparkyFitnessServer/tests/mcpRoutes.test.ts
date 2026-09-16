@@ -123,7 +123,7 @@ const app = express();
 app.use(
   '/mcp',
   requestLogger({ logCompletion: true }),
-  express.json({ limit: '1mb' }),
+  express.json({ limit: '50mb' }),
   cookieParser(),
   fakeAuthenticate,
   mcpRoutes
@@ -150,7 +150,7 @@ describe('POST /mcp', () => {
 
     expect(res.status).toBe(200);
     const tools = res.body.result.tools;
-    expect(tools).toHaveLength(50);
+    expect(tools).toHaveLength(51);
     expect(tools.map((t: { name: string }) => t.name).sort()).toEqual(
       EXPECTED_TOOL_NAMES
     );
@@ -347,7 +347,7 @@ describe('POST /mcp', () => {
     abortApp.use(
       '/mcp',
       requestLogger({ logCompletion: true }),
-      express.json({ limit: '1mb' }),
+      express.json({ limit: '50mb' }),
       (req: Request) => {
         req.socket.destroy();
       }
@@ -374,8 +374,23 @@ describe('POST /mcp', () => {
     });
   });
 
-  it('rejects bodies over the route-local 1mb limit with 413', async () => {
-    const padding = 'x'.repeat(1024 * 1024 + 100);
+  it('accepts bodies over 1mb (for photo/image tools) and rejects bodies over 50mb with 413', async () => {
+    // 1.5MB body should succeed (not 413)
+    const validLargePadding = 'x'.repeat(1.5 * 1024 * 1024);
+    const validRes = await request(app)
+      .post('/mcp')
+      .set(MCP_HEADERS)
+      .set('Authorization', 'Bearer valid')
+      .send({
+        jsonrpc: '2.0',
+        id: 4,
+        method: 'tools/list',
+        params: { padding: validLargePadding },
+      });
+    expect(validRes.status).toBe(200);
+
+    // Over 50MB body should be rejected with 413
+    const overLimitPadding = 'x'.repeat(50 * 1024 * 1024 + 1024);
     const res = await request(app)
       .post('/mcp')
       .set(MCP_HEADERS)
@@ -384,7 +399,7 @@ describe('POST /mcp', () => {
         jsonrpc: '2.0',
         id: 4,
         method: 'tools/list',
-        params: { padding },
+        params: { padding: overLimitPadding },
       });
 
     expect(res.status).toBe(413);
@@ -399,7 +414,7 @@ describe('POST /mcp', () => {
 
     expect(res.status).toBe(200);
     const names = res.body.result.tools.map((t: { name: string }) => t.name);
-    expect(res.body.result.tools).toHaveLength(50);
+    expect(res.body.result.tools).toHaveLength(51);
     for (const devTool of DEV_TOOL_NAMES) {
       expect(names).not.toContain(devTool);
     }
@@ -417,7 +432,7 @@ describe('POST /mcp', () => {
 
     expect(res.status).toBe(200);
     const names = res.body.result.tools.map((t: { name: string }) => t.name);
-    expect(res.body.result.tools).toHaveLength(55);
+    expect(res.body.result.tools).toHaveLength(56);
     for (const devTool of DEV_TOOL_NAMES) {
       expect(names).toContain(devTool);
     }
@@ -435,7 +450,7 @@ describe('POST /mcp', () => {
 
     expect(res.status).toBe(200);
     const names = res.body.result.tools.map((t: { name: string }) => t.name);
-    expect(res.body.result.tools).toHaveLength(50);
+    expect(res.body.result.tools).toHaveLength(51);
     for (const devTool of DEV_TOOL_NAMES) {
       expect(names).not.toContain(devTool);
     }

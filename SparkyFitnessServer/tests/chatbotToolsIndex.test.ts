@@ -22,6 +22,7 @@ const EXPECTED_TOOLS = [
   'sparky_generate_coaching_plan',
   'sparky_get_30_day_trends',
   'sparky_get_barcode',
+  'sparky_get_caffeine_kinetics',
   'sparky_get_contextual_nudge',
   'sparky_get_daily_exercise_totals',
   'sparky_get_daily_report',
@@ -75,6 +76,7 @@ const EXPECTED_TOOLS = [
 // photos, sleep science, etc.) since those now live inside those categories.
 const EXPECTED_CORE_TOOLS = [
   'sparky_get_barcode',
+  'sparky_get_caffeine_kinetics',
   'sparky_get_daily_exercise_totals',
   'sparky_get_exercise_details',
   'sparky_get_exercise_diary',

@@ -380,6 +380,7 @@ export type FoodPhotoFlowParamList = {
         /** Meal name for the ad-hoc food_entry_meals parent. */
         mealName: string;
         description?: string;
+        notes?: string;
         ingredients: FoodPhotoLogItem[];
         /** Also save the plate as a reusable meal template. */
         saveAsMeal: boolean;

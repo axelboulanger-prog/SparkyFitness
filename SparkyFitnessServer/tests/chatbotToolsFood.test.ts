@@ -1346,6 +1346,146 @@ describe('log_food', () => {
   });
 });
 
+// A chat-logged food with no entry_time landed as NULL, which the caffeine
+// kinetics estimate (services/caffeineKineticsService.ts) then had to guess
+// at -- the meal's default time, or noon -- instead of the time the dose was
+// actually taken. log_food, log_external_food, and create_food all route
+// through resolveEntryTime, which mirrors the web/mobile prefill: "now" when
+// logging for today, otherwise the meal's own default_time, otherwise unset.
+describe('entry_time defaults when the model omits one', () => {
+  it("log_food defaults to 'now' in the user's timezone when logging for today", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-10T14:32:00Z'));
+    try {
+      vi.mocked(mealTypeRepository.getMealTypeById).mockResolvedValue({
+        id: MEAL_TYPE_ID,
+        name: 'Lunch',
+        default_time: null,
+      });
+      vi.mocked(foodRepository.getFoodById).mockResolvedValue(eggsRow);
+      vi.mocked(foodEntryService.createFoodEntry).mockResolvedValue({
+        id: ENTRY_ID,
+        food_name: 'Eggs',
+      });
+
+      await tools.sparky_manage_food.execute!(
+        {
+          action: 'log_food',
+          food_id: FOOD_ID,
+          quantity: 1,
+          meal_type_id: MEAL_TYPE_ID,
+          // No entry_date -> defaults to today, no entry_time.
+        },
+        opts
+      );
+
+      expect(foodEntryService.createFoodEntry).toHaveBeenCalledWith(
+        'user-1',
+        'user-1',
+        expect.objectContaining({ entry_time: '14:32' })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('log_food falls back to the meal default_time for a non-today date', async () => {
+    vi.mocked(mealTypeRepository.getMealTypeById).mockResolvedValue({
+      id: MEAL_TYPE_ID,
+      name: 'Lunch',
+      default_time: '12:30:00',
+    });
+    vi.mocked(foodRepository.getFoodById).mockResolvedValue(eggsRow);
+    vi.mocked(foodEntryService.createFoodEntry).mockResolvedValue({
+      id: ENTRY_ID,
+      food_name: 'Eggs',
+    });
+
+    await tools.sparky_manage_food.execute!(
+      {
+        action: 'log_food',
+        food_id: FOOD_ID,
+        quantity: 1,
+        meal_type_id: MEAL_TYPE_ID,
+        entry_date: '2026-01-01',
+      },
+      opts
+    );
+
+    expect(foodEntryService.createFoodEntry).toHaveBeenCalledWith(
+      'user-1',
+      'user-1',
+      expect.objectContaining({ entry_time: '12:30' })
+    );
+  });
+
+  it('log_food leaves entry_time unset for a non-today date with no meal default_time', async () => {
+    vi.mocked(mealTypeRepository.getMealTypeById).mockResolvedValue({
+      id: MEAL_TYPE_ID,
+      name: 'Lunch',
+      default_time: null,
+    });
+    vi.mocked(foodRepository.getFoodById).mockResolvedValue(eggsRow);
+    vi.mocked(foodEntryService.createFoodEntry).mockResolvedValue({
+      id: ENTRY_ID,
+      food_name: 'Eggs',
+    });
+
+    await tools.sparky_manage_food.execute!(
+      {
+        action: 'log_food',
+        food_id: FOOD_ID,
+        quantity: 1,
+        meal_type_id: MEAL_TYPE_ID,
+        entry_date: '2026-01-01',
+      },
+      opts
+    );
+
+    expect(foodEntryService.createFoodEntry).toHaveBeenCalledWith(
+      'user-1',
+      'user-1',
+      expect.objectContaining({ entry_time: undefined })
+    );
+  });
+
+  it('an explicit entry_time always wins, even when logging for today', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-10T14:32:00Z'));
+    try {
+      vi.mocked(mealTypeRepository.getMealTypeById).mockResolvedValue({
+        id: MEAL_TYPE_ID,
+        name: 'Lunch',
+        default_time: null,
+      });
+      vi.mocked(foodRepository.getFoodById).mockResolvedValue(eggsRow);
+      vi.mocked(foodEntryService.createFoodEntry).mockResolvedValue({
+        id: ENTRY_ID,
+        food_name: 'Eggs',
+      });
+
+      await tools.sparky_manage_food.execute!(
+        {
+          action: 'log_food',
+          food_id: FOOD_ID,
+          quantity: 1,
+          meal_type_id: MEAL_TYPE_ID,
+          entry_time: '08:15',
+        },
+        opts
+      );
+
+      expect(foodEntryService.createFoodEntry).toHaveBeenCalledWith(
+        'user-1',
+        'user-1',
+        expect.objectContaining({ entry_time: '08:15' })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('log_external_food', () => {
   const usdaApple = {
     name: 'Apple',
@@ -1530,6 +1670,10 @@ describe('log_external_food', () => {
       vitamin_c: null,
       calcium: null,
       iron: null,
+      caffeine_mg: null,
+      alcohol_g: null,
+      water_ml: null,
+      abv_percent: null,
       glycemic_index: null,
       // food_variants.source has a CHECK constraint (manual|ai_estimate|
       // imported); passing the provider name here rolled back the whole insert
@@ -2054,10 +2198,83 @@ describe('create_food', () => {
       vitamin_c: null,
       calcium: null,
       iron: null,
+      caffeine_mg: null,
+      alcohol_g: null,
+      water_ml: null,
       glycemic_index: 'Low',
       is_quick_food: false,
     });
     expect(foodEntryService.createFoodEntry).not.toHaveBeenCalled();
+  });
+
+  // #2115/#1958/#1925: caffeine_mg and alcohol_g were added as first-class
+  // food_variants columns, but this tool never grew a parameter for either,
+  // so Sparky could not create a drink with caffeine or alcohol content.
+  it('passes caffeine_mg and alcohol_g through to createFood', async () => {
+    vi.mocked(foodCoreService.createFood).mockResolvedValue({
+      id: FOOD_ID,
+      name: 'Espresso',
+      brand: null,
+      default_variant: {
+        id: VARIANT_ID,
+        serving_size: 1,
+        serving_unit: 'shot',
+        calories: 3,
+      },
+    });
+
+    await tools.sparky_manage_food.execute!(
+      {
+        action: 'create_food',
+        food_name: 'Espresso',
+        calories: 3,
+        protein: 0.1,
+        carbs: 0.5,
+        fat: 0.2,
+        caffeine_mg: 63,
+      },
+      opts
+    );
+
+    expect(foodCoreService.createFood).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ caffeine_mg: 63, alcohol_g: null })
+    );
+  });
+
+  // water_ml is a real food_variants column (the same hydration/nutrition
+  // link PR) but was never wired into this tool either, for the same reason
+  // caffeine_mg and alcohol_g weren't.
+  it('passes water_ml through to createFood', async () => {
+    vi.mocked(foodCoreService.createFood).mockResolvedValue({
+      id: FOOD_ID,
+      name: 'Watermelon',
+      brand: null,
+      default_variant: {
+        id: VARIANT_ID,
+        serving_size: 100,
+        serving_unit: 'g',
+        calories: 30,
+      },
+    });
+
+    await tools.sparky_manage_food.execute!(
+      {
+        action: 'create_food',
+        food_name: 'Watermelon',
+        calories: 30,
+        protein: 0.6,
+        carbs: 8,
+        fat: 0.2,
+        water_ml: 91,
+      },
+      opts
+    );
+
+    expect(foodCoreService.createFood).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ water_ml: 91 })
+    );
   });
 
   it('defaults non-count units to 100 and auto-logs when meal_type is given', async () => {
@@ -3288,6 +3505,85 @@ describe('update_food_variant', () => {
       'user-1'
     );
     expect(foodCoreService.updateFoodEntriesSnapshot).not.toHaveBeenCalled();
+  });
+
+  // #2115/#1958/#1925: caffeine_mg and alcohol_g were added as first-class
+  // food_variants columns, but this tool's field map was never updated, so
+  // asking Sparky to add caffeine (or alcohol) to an existing drink silently
+  // had no field to write it to.
+  it('updates caffeine_mg and alcohol_g on an existing variant', async () => {
+    vi.mocked(foodRepository.getFoodVariantById).mockResolvedValue({
+      id: VARIANT_ID,
+      food_id: FOOD_ID,
+    });
+    vi.mocked(foodRepository.getFoodById).mockResolvedValue({
+      id: FOOD_ID,
+      name: 'Cold Brew',
+      user_id: 'user-1',
+    });
+    vi.mocked(foodRepository.updateFoodVariant).mockResolvedValue({
+      id: VARIANT_ID,
+      food_id: FOOD_ID,
+      calories: 5,
+      serving_size: 355,
+      serving_unit: 'ml',
+    });
+
+    const result = await tools.sparky_manage_food.execute!(
+      {
+        action: 'update_food_variant',
+        variant_id: VARIANT_ID,
+        caffeine_mg: 200,
+        alcohol_g: 0,
+      },
+      opts
+    );
+
+    expect(result).toBe(
+      '✅ Food variant updated for "Cold Brew" (5 kcal per 355ml).'
+    );
+    expect(foodRepository.updateFoodVariant).toHaveBeenCalledWith(
+      VARIANT_ID,
+      { caffeine_mg: 200, alcohol_g: 0 },
+      'user-1'
+    );
+  });
+
+  it('updates water_ml on an existing variant', async () => {
+    vi.mocked(foodRepository.getFoodVariantById).mockResolvedValue({
+      id: VARIANT_ID,
+      food_id: FOOD_ID,
+    });
+    vi.mocked(foodRepository.getFoodById).mockResolvedValue({
+      id: FOOD_ID,
+      name: 'Watermelon',
+      user_id: 'user-1',
+    });
+    vi.mocked(foodRepository.updateFoodVariant).mockResolvedValue({
+      id: VARIANT_ID,
+      food_id: FOOD_ID,
+      calories: 30,
+      serving_size: 100,
+      serving_unit: 'g',
+    });
+
+    const result = await tools.sparky_manage_food.execute!(
+      {
+        action: 'update_food_variant',
+        variant_id: VARIANT_ID,
+        water_ml: 91,
+      },
+      opts
+    );
+
+    expect(result).toBe(
+      '✅ Food variant updated for "Watermelon" (30 kcal per 100g).'
+    );
+    expect(foodRepository.updateFoodVariant).toHaveBeenCalledWith(
+      VARIANT_ID,
+      { water_ml: 91 },
+      'user-1'
+    );
   });
 
   it('refreshes diary snapshots when update_existing_entries is true', async () => {

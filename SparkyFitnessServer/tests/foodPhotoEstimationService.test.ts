@@ -544,6 +544,39 @@ describe('estimateFoodPhotoNutrition', () => {
       }
     });
 
+    it('normalizes string assumptions from local models into an array', async () => {
+      mockGetVisionSetting.mockResolvedValue(
+        makeSetting({ service_type: 'openai_compatible' })
+      );
+      mockGetBackendSetting.mockResolvedValue(
+        makeServiceDetail({
+          service_type: 'openai_compatible',
+          custom_url: 'https://example.local/v1',
+        })
+      );
+      const stringAssumptionsShape: Record<string, unknown> = {
+        ...sampleEstimate,
+        items: [
+          {
+            ...sampleEstimate.items[0],
+            assumptions: 'Assumed grilled with 1 tsp of oil',
+          },
+        ],
+      };
+      mockFetch(openAiBody(stringAssumptionsShape));
+      const result = await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.estimate.items[0].assumptions).toEqual([
+          'Assumed grilled with 1 tsp of oil',
+        ]);
+      }
+    });
+
     it('returns PARSE_ERROR when the payload cannot be repaired', async () => {
       mockGetVisionSetting.mockResolvedValue(makeSetting());
       mockGetBackendSetting.mockResolvedValue(makeServiceDetail());
@@ -556,6 +589,26 @@ describe('estimateFoodPhotoNutrition', () => {
       });
       expect(result.success).toBe(false);
       if (!result.success) expect(result.code).toBe('PARSE_ERROR');
+    });
+
+    it('cleans up verbose narrative meal summaries into concise dish names', async () => {
+      mockGetVisionSetting.mockResolvedValue(makeSetting());
+      mockGetBackendSetting.mockResolvedValue(makeServiceDetail());
+      const verboseShape: Record<string, unknown> = {
+        ...sampleEstimate,
+        meal_summary:
+          'A creamy chicken and pasta dish, featuring penne pasta mixed with chunks of cooked chicken in a thick, creamy white sauce, garnished with fresh herbs. The dish appears seasoned and rich',
+      };
+      mockFetch(googleBody(verboseShape));
+      const result = await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.estimate.meal_summary).toBe('Creamy chicken and pasta');
+      }
     });
   });
 });

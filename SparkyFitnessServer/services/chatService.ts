@@ -51,9 +51,10 @@ interface ChatMessagePart {
 }
 
 interface ProcessedMessagePart {
-  type: 'text' | 'image';
+  type: 'text' | 'file';
   text?: string;
-  image?: string;
+  data?: string | Uint8Array | URL;
+  mediaType?: string;
 }
 
 interface ChatMessage {
@@ -852,7 +853,7 @@ function stripHistoricalImages(messages: LlmMessage[]): LlmMessage[] {
     if (index === lastUserIndex || !Array.isArray(msg.content)) {
       return msg;
     }
-    const withoutImages = msg.content.filter((part) => part.type !== 'image');
+    const withoutImages = msg.content.filter((part) => part.type !== 'file');
     if (withoutImages.length === msg.content.length) {
       return msg;
     }
@@ -895,7 +896,7 @@ function estimateMessageTokens(
   let total = PER_MESSAGE_OVERHEAD;
   for (const part of content) {
     total +=
-      part.type === 'image'
+      part.type === 'file'
         ? IMAGE_TOKEN_ESTIMATE
         : Math.ceil((part.text?.length ?? 0) / CHARS_PER_TOKEN);
   }
@@ -1157,9 +1158,33 @@ function mapMessagePart(part: ChatMessagePart): ProcessedMessagePart {
         part.mediaType?.startsWith('image/') ||
         part.url?.startsWith('data:image/')))
   ) {
-    // Handle both base64 data URLs and remote URLs
     const url = part.image_url?.url || part.image || part.url || '';
-    return { type: 'image' as const, image: url };
+    if (!url) {
+      return { type: 'text' as const, text: '' };
+    }
+    let mediaType =
+      part.mediaType ||
+      part.mimeType ||
+      (url.startsWith('data:')
+        ? url.split(';')[0].replace('data:', '')
+        : undefined);
+
+    if (!mediaType && typeof url === 'string') {
+      const cleanUrl = url.split('?')[0].split('#')[0].toLowerCase();
+      if (cleanUrl.endsWith('.png')) mediaType = 'image/png';
+      else if (cleanUrl.endsWith('.webp')) mediaType = 'image/webp';
+      else if (cleanUrl.endsWith('.gif')) mediaType = 'image/gif';
+      else if (cleanUrl.endsWith('.jpg') || cleanUrl.endsWith('.jpeg'))
+        mediaType = 'image/jpeg';
+      else if (cleanUrl.endsWith('.avif')) mediaType = 'image/avif';
+      else if (cleanUrl.endsWith('.svg')) mediaType = 'image/svg+xml';
+      else mediaType = 'image/jpeg';
+    }
+    return {
+      type: 'file' as const,
+      data: url,
+      mediaType: mediaType || 'image/jpeg',
+    };
   }
   // Fallback: treat unknown parts as text
   return { type: 'text' as const, text: String(part.text || '') };
@@ -1180,7 +1205,7 @@ function toCoreMessages(messages: ChatMessage[]): LlmMessage[] {
         .map(mapMessagePart)
         .filter(
           (p) =>
-            p.type === 'image' ||
+            p.type === 'file' ||
             (p.type === 'text' && p.text && p.text.trim() !== '')
         );
       if (parts.length > 0) {
