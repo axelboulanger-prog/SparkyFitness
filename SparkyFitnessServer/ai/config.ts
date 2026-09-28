@@ -16,6 +16,8 @@ function getDefaultModel(serviceType: any) {
       return 'google/gemini-2.5-flash';
     case 'xai':
       return 'grok-4.3';
+    case 'perplexity':
+      return 'sonar';
     case 'meta':
       return 'muse-spark-1.1';
     case 'ollama':
@@ -42,6 +44,8 @@ function getDefaultVisionModel(serviceType: any) {
       return 'google/gemini-2.5-flash';
     case 'xai':
       return 'grok-4.3';
+    case 'perplexity':
+      return 'sonar-pro';
     case 'meta':
       return 'muse-spark-1.1';
     case 'ollama':
@@ -73,6 +77,8 @@ function getOpenAiCompatibleBaseUrl(
       return 'https://openrouter.ai/api/v1';
     case 'xai':
       return 'https://api.x.ai/v1';
+    case 'perplexity':
+      return 'https://api.perplexity.ai/v1';
     case 'meta':
       // Muse Spark's OpenAI-compatible endpoint (auth is Bearer api_key).
       return 'https://api.meta.ai/v1';

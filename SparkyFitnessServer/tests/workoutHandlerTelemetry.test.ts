@@ -171,6 +171,26 @@ describe('workoutHandler — backward compatibility', () => {
     expect(payload.source_id).toBe('hk-workout-1');
   });
 
+  it('stores the workout start as a local entry time', async () => {
+    await workoutHandler.handle(baseEntry(), makeCtx());
+
+    const payload = (exerciseEntryDb.createExerciseEntry as Mock).mock
+      .calls[0][1];
+    expect(payload.entry_time).toBe('09:00:00');
+  });
+
+  it('still saves the workout when record_timezone is not a real zone', async () => {
+    const result = await workoutHandler.handle(
+      baseEntry({ record_timezone: 'Not/AZone' }),
+      makeCtx()
+    );
+
+    expect(result.status).toBe('success');
+    const payload = (exerciseEntryDb.createExerciseEntry as Mock).mock
+      .calls[0][1];
+    expect(payload.entry_time).toBeUndefined();
+  });
+
   it('persists provider-associated workout steps for calorie deduplication', async () => {
     await workoutHandler.handle(baseEntry({ steps: 6123 }), makeCtx());
 
@@ -563,5 +583,37 @@ describe('workoutHandler — failure isolation', () => {
     const result = await workoutHandler.handle(baseEntry(), makeCtx());
 
     expect(result.status).toBe('error');
+  });
+});
+
+describe('workoutHandler — start time zone', () => {
+  it('stores the zone the phone recorded the workout in with entry_time', async () => {
+    await workoutHandler.handle(
+      baseEntry({ record_timezone: 'America/New_York' }),
+      makeCtx()
+    );
+
+    const data = (exerciseEntryDb.createExerciseEntry as Mock).mock.calls[0][1];
+    expect(data.entry_time).toBe('05:00:00');
+    expect(data.record_timezone).toBe('America/New_York');
+  });
+
+  it('stores the profile zone when the phone sent none', async () => {
+    await workoutHandler.handle(baseEntry(), makeCtx());
+
+    const data = (exerciseEntryDb.createExerciseEntry as Mock).mock.calls[0][1];
+    expect(data.entry_time).toBe('09:00:00');
+    expect(data.record_timezone).toBe('UTC');
+  });
+
+  it('stores no zone when the start time could not be resolved', async () => {
+    await workoutHandler.handle(
+      baseEntry({ record_timezone: 'Not/AZone' }),
+      makeCtx()
+    );
+
+    const data = (exerciseEntryDb.createExerciseEntry as Mock).mock.calls[0][1];
+    expect(data.entry_time).toBeUndefined();
+    expect(data.record_timezone).toBeUndefined();
   });
 });

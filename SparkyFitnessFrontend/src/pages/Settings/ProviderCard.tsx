@@ -11,6 +11,7 @@ import { Trash2, Edit, Lock, RefreshCw, Link2Off } from 'lucide-react';
 import { decodeYazioAppId } from '@/utils/settings';
 import { useExternalProviderTypesQuery } from '@/hooks/Settings/useExternalProviderSettings';
 import SyncRangeDialog from './SyncRangeDialog';
+import type { SyncMockOptions } from './SyncRangeDialog';
 
 import {
   useConnectFitbitMutation,
@@ -34,6 +35,11 @@ import {
   useManualSyncPolarMutation,
   useManualSyncStravaMutation,
   useSyncHevyMutation,
+  useSyncLiftosaurMutation,
+  useDisconnectLiftosaurMutation,
+  useConnectCorosMutation,
+  useDisconnectCorosMutation,
+  useManualSyncCorosMutation,
 } from '@/hooks/Integrations/useIntegrations';
 import {
   useDeleteExternalProviderMutation,
@@ -94,6 +100,10 @@ const PROVIDER_PORTALS: Record<string, { label: string; url: string }> = {
     label: 'Open Food Facts Portal',
     url: 'https://world.openfoodfacts.org/',
   },
+  coros_mcp: {
+    label: 'COROS Training Hub',
+    url: 'https://t.coros.com',
+  },
 };
 
 export const ProviderCard = ({
@@ -127,6 +137,8 @@ export const ProviderCard = ({
     useConnectStravaMutation();
   const { mutate: handleConnectWithings, isPending: isConnectWithingsPending } =
     useConnectWithingsMutation();
+  const { mutate: handleConnectCoros, isPending: isConnectCorosPending } =
+    useConnectCorosMutation();
 
   const {
     mutate: handleDisconnectFitbit,
@@ -152,6 +164,8 @@ export const ProviderCard = ({
     mutate: handleDisconnectWithings,
     isPending: isDisconnectWithingsPending,
   } = useDisconnectWithingsMutation();
+  const { mutate: handleDisconnectCoros, isPending: isDisconnectCorosPending } =
+    useDisconnectCorosMutation();
 
   const { mutate: handleManualSync, isPending: isSyncWithingsPending } =
     useManualSyncWithingsMutation();
@@ -169,8 +183,16 @@ export const ProviderCard = ({
     mutate: handleManualSyncGoogleHealth,
     isPending: isSyncGoogleHealthPending,
   } = useManualSyncGoogleHealthMutation();
+  const { mutate: handleManualSyncCoros, isPending: isSyncCorosPending } =
+    useManualSyncCorosMutation();
   const { mutate: syncHevyData, isPending: isSyncHevyPending } =
     useSyncHevyMutation();
+  const { mutate: syncLiftosaurData, isPending: isSyncLiftosaurPending } =
+    useSyncLiftosaurMutation();
+  const {
+    mutate: handleDisconnectLiftosaur,
+    isPending: isDisconnectLiftosaurPending,
+  } = useDisconnectLiftosaurMutation();
 
   const [isSyncDialogOpen, setIsSyncDialogOpen] = useState(false);
 
@@ -183,31 +205,60 @@ export const ProviderCard = ({
   const { mutateAsync: deleteGlobalProvider, isPending: globalDeletePending } =
     useDeleteGlobalProvider();
 
-  const executeSync = (startDate: string, endDate: string) => {
+  const executeSync = (
+    startDate: string,
+    endDate: string,
+    // Present only while an admin has enabled the mock-data options; the server
+    // ignores them otherwise.
+    mockOptions?: SyncMockOptions
+  ) => {
+    const mock = mockOptions ?? {};
     switch (provider.provider_type) {
       case 'withings':
-        handleManualSync({ startDate, endDate });
+        handleManualSync({ startDate, endDate, ...mock });
         break;
       case 'fitbit':
-        handleManualSyncFitbit({ startDate, endDate });
+        handleManualSyncFitbit({ startDate, endDate, ...mock });
         break;
       case 'oura':
-        handleManualSyncOura({ startDate, endDate });
+        handleManualSyncOura({ startDate, endDate, ...mock });
         break;
       case 'polar':
-        handleManualSyncPolar({ providerId: provider.id, startDate, endDate });
+        handleManualSyncPolar({
+          providerId: provider.id,
+          startDate,
+          endDate,
+          ...mock,
+        });
         break;
       case 'strava':
-        handleManualSyncStrava({ startDate, endDate });
+        handleManualSyncStrava({ startDate, endDate, ...mock });
         break;
       case 'garmin':
-        handleManualSyncGarmin({ startDate, endDate });
+        handleManualSyncGarmin({ startDate, endDate, ...mock });
         break;
       case 'googlehealth':
-        handleManualSyncGoogleHealth({ startDate, endDate });
+        handleManualSyncGoogleHealth({ startDate, endDate, ...mock });
+        break;
+      case 'coros_mcp':
+        handleManualSyncCoros({
+          providerId: provider.id,
+          startDate,
+          endDate,
+          ...mock,
+        });
         break;
       case 'hevy':
         syncHevyData({
+          fullSync: false,
+          providerId: provider.id,
+          startDate,
+          endDate,
+          ...mock,
+        });
+        break;
+      case 'liftosaur':
+        syncLiftosaurData({
           fullSync: false,
           providerId: provider.id,
           startDate,
@@ -229,6 +280,7 @@ export const ProviderCard = ({
     isConnectPolarPending ||
     isConnectStravaPending ||
     isConnectWithingsPending ||
+    isConnectCorosPending ||
     isDisconnectFitbitPending ||
     isDisconnectOuraPending ||
     isDisconnectGoogleHealthPending ||
@@ -236,6 +288,7 @@ export const ProviderCard = ({
     isDisconnectPolarPending ||
     isDisconnectStravaPending ||
     isDisconnectWithingsPending ||
+    isDisconnectCorosPending ||
     isSyncWithingsPending ||
     isSyncFitbitPending ||
     isSyncOuraPending ||
@@ -243,7 +296,10 @@ export const ProviderCard = ({
     isSyncGoogleHealthPending ||
     isSyncPolarPending ||
     isSyncStravaPending ||
-    isSyncHevyPending;
+    isSyncCorosPending ||
+    isSyncHevyPending ||
+    isSyncLiftosaurPending ||
+    isDisconnectLiftosaurPending;
 
   const handleToggleActive = async (providerId: string, isActive: boolean) => {
     try {
@@ -319,7 +375,8 @@ export const ProviderCard = ({
       provider.has_token ||
       provider.garmin_connect_status === 'linked' ||
       provider.garmin_connect_status === 'connected' ||
-      provider.hevy_connect_status === 'connected';
+      provider.hevy_connect_status === 'connected' ||
+      provider.liftosaur_connect_status === 'connected';
 
     switch (provider.provider_type) {
       case 'withings':
@@ -376,6 +433,15 @@ export const ProviderCard = ({
           tokenExpires: provider.strava_token_expires,
           hasToken: isLinked && provider.is_active,
         };
+      case 'coros_mcp':
+        return {
+          connect: () => handleConnectCoros(provider.id),
+          disconnect: () => handleDisconnectCoros(provider.id),
+          sync: () => setIsSyncDialogOpen(true),
+          lastSync: provider.coros_last_sync_at,
+          tokenExpires: provider.coros_token_expires,
+          hasToken: isLinked && provider.is_active,
+        };
       case 'garmin':
         return {
           connect: null,
@@ -391,6 +457,15 @@ export const ProviderCard = ({
           disconnect: null,
           sync: () => setIsSyncDialogOpen(true),
           lastSync: provider.hevy_last_sync_at,
+          tokenExpires: null,
+          hasToken: isLinked && provider.is_active,
+        };
+      case 'liftosaur':
+        return {
+          connect: null,
+          disconnect: () => handleDisconnectLiftosaur(provider.id),
+          sync: () => setIsSyncDialogOpen(true),
+          lastSync: provider.liftosaur_last_sync_at,
           tokenExpires: null,
           hasToken: isLinked && provider.is_active,
         };
@@ -636,7 +711,9 @@ export const ProviderCard = ({
         'polar',
         'garmin',
         'hevy',
+        'liftosaur',
         'strava',
+        'coros_mcp',
       ].includes(provider.provider_type) && (
         <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md p-2 text-xs text-yellow-800 dark:text-yellow-200 mt-2 flex items-center gap-1">
           <strong>Note from CodewithCJ:</strong> I don't own{' '}
@@ -652,28 +729,15 @@ export const ProviderCard = ({
                 <p>
                   Help improve this integration by sharing anonymized mock data!
                 </p>
-                <p className="mt-2 font-mono text-xs bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 p-2 rounded border border-gray-200 dark:border-gray-700">
-                  SPARKY_FITNESS_SAVE_MOCK_DATA=true
+                <p className="mt-2 text-xs">
+                  Enable <strong>Allow Local Provider Response Capture</strong>{' '}
+                  in <strong>Admin &gt; Global Provider Settings</strong>, then
+                  check <strong>Capture raw provider response</strong> in the
+                  Sync Range dialog.
                 </p>
                 <p className="mt-2 text-xs">
-                  Add this variable to the{' '}
-                  <strong>
-                    {provider.provider_type === 'garmin'
-                      ? 'SparkyFitnessGarmin'
-                      : 'SparkyFitnessServer'}
-                  </strong>{' '}
-                  container & restart the container. Syncing after setup will
-                  generate JSON files in{' '}
-                  <code>
-                    {provider.provider_type === 'garmin'
-                      ? '/app/mock_data'
-                      : '/app/SparkyFitnessServer/mock_data'}
-                  </code>
-                  .
-                </p>
-                <p className="mt-2 text-xs">
-                  Share files with <strong>CodewithCJ</strong> on Discord.
-                  Ensure data is anonymized.
+                  Share the exported diagnostic bundle with{' '}
+                  <strong>CodewithCJ</strong> on Discord.
                 </p>
               </TooltipContent>
             </Tooltip>

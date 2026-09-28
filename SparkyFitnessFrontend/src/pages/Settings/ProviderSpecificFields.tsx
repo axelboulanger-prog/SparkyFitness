@@ -2,6 +2,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Clipboard } from 'lucide-react';
 import { useTranslation, Trans } from 'react-i18next';
 import type { ExternalDataProvider } from './ExternalProviderSettings';
@@ -82,6 +89,7 @@ export const ProviderSpecificFields = ({
     'strava',
     'polar',
     'hevy',
+    'liftosaur',
   ].includes(provider.provider_type || '');
 
   const providerDashboard =
@@ -157,7 +165,9 @@ export const ProviderSpecificFields = ({
               ? 'Client Secret'
               : provider.provider_type === 'yazio'
                 ? 'YAZIO Password'
-                : 'API Key / App Key'}
+                : provider.provider_type === 'liftosaur'
+                  ? 'Liftosaur API Key'
+                  : 'API Key / App Key'}
           </Label>
           <Input
             id="new_app_key"
@@ -166,7 +176,11 @@ export const ProviderSpecificFields = ({
             onChange={(e) =>
               setProvider((prev) => ({ ...prev, app_key: e.target.value }))
             }
-            placeholder="Enter Key"
+            placeholder={
+              provider.provider_type === 'liftosaur'
+                ? 'Enter Liftosaur API Key (lftsk_...)'
+                : 'Enter Key'
+            }
             autoComplete="off"
           />
         </div>
@@ -518,6 +532,14 @@ export const ProviderSpecificFields = ({
         </p>
       )}
 
+      {provider.provider_type === 'liftosaur' && (
+        <p className="text-sm text-muted-foreground col-span-2">
+          Generate an API key in the Liftosaur app: Settings &#62; API Keys
+          (starts with <span className="font-mono">lftsk_</span>). A Liftosaur
+          Pro subscription is required to use the Liftosaur API.
+        </p>
+      )}
+
       {provider.provider_type === 'nutritionix' && (
         <p className="text-sm text-muted-foreground col-span-2">
           Get your App ID and App Key from the{' '}
@@ -568,7 +590,9 @@ export const ProviderSpecificFields = ({
         </p>
       )}
 
-      {['hevy', 'polar'].includes(provider.provider_type || '') && (
+      {['hevy', 'polar', 'liftosaur'].includes(
+        provider.provider_type || ''
+      ) && (
         <div className="flex items-center space-x-2 col-span-2">
           <Switch
             id="full_sync_on_connect"
@@ -640,6 +664,71 @@ export const ProviderSpecificFields = ({
               wger Project Website
             </a>
             .
+          </p>
+        </div>
+      )}
+
+      {provider.provider_type === 'coros_mcp' && (
+        <div className="col-span-2 space-y-4">
+          <div>
+            <Label htmlFor="coros_region">
+              {t(
+                'settings.foodExerciseDataProviders.coros.regionLabel',
+                'COROS Region'
+              )}
+            </Label>
+            <Select
+              value={provider.base_url || 'https://mcpus.coros.com/mcp'}
+              onValueChange={(val) =>
+                setProvider((prev) => ({ ...prev, base_url: val }))
+              }
+            >
+              <SelectTrigger id="coros_region" className="w-full">
+                <SelectValue placeholder="Select region" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="https://mcpus.coros.com/mcp">
+                  {t(
+                    'settings.foodExerciseDataProviders.coros.regionUs',
+                    'United States (mcpus.coros.com)'
+                  )}
+                </SelectItem>
+                <SelectItem value="https://mcpeu.coros.com/mcp">
+                  {t(
+                    'settings.foodExerciseDataProviders.coros.regionEu',
+                    'Europe (mcpeu.coros.com)'
+                  )}{' '}
+                  <span className="text-xs text-muted-foreground">
+                    (
+                    {t(
+                      'settings.foodExerciseDataProviders.coros.notTested',
+                      'not yet tested'
+                    )}
+                    )
+                  </span>
+                </SelectItem>
+                <SelectItem value="https://mcpcn.coros.com/mcp">
+                  {t(
+                    'settings.foodExerciseDataProviders.coros.regionCn',
+                    'Mainland China (mcpcn.coros.com)'
+                  )}{' '}
+                  <span className="text-xs text-muted-foreground">
+                    (
+                    {t(
+                      'settings.foodExerciseDataProviders.coros.notTested',
+                      'not yet tested'
+                    )}
+                    )
+                  </span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {t(
+              'settings.foodExerciseDataProviders.coros.infoText',
+              "No API keys needed. You'll sign in with your COROS account. Your SparkyFitness address must be https:// (or localhost) for COROS to accept the connection."
+            )}
           </p>
         </div>
       )}

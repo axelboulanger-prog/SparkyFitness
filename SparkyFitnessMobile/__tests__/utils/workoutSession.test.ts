@@ -1,4 +1,5 @@
 import {
+  summarizeWorkoutHeartRate,
   CATEGORY_ICON_MAP,
   getWorkoutIcon,
   getSourceLabel,
@@ -30,7 +31,9 @@ import {
   formatRecentSessionSet,
   describeActiveSet,
   describeActiveSetAssumed,
+  evaluateExerciseProgression,
   resolveAssumedSetValues,
+  resolveLiveAssumedSetValues,
   extractPlannedSetValues,
   stripPlannedSetValues,
   formatSetLoad,
@@ -58,7 +61,9 @@ import {
   effectiveSetDurationSec,
   formatDurationSeconds,
   buildActivitySetsPayload,
+  firstSetInputField,
 } from '../../src/utils/workoutSession';
+import { wodScoreFormat } from '../../src/utils/wodScore';
 import type {
   ExerciseEntryResponse,
   ExerciseSessionResponse,
@@ -1223,6 +1228,28 @@ describe('workoutSession', () => {
       expect(payload[1].sort_order).toBe(1);
     });
 
+    it('round-trips rir so an edit-save cannot wipe stored reps in reserve', () => {
+      const payload = buildExercisesPayload(
+        [
+          makeDraftExercise({
+            sets: [
+              {
+                clientId: 's1',
+                serverId: 11,
+                weight: '100',
+                reps: '8',
+                rpe: 8,
+                rir: 2,
+              },
+            ],
+          }),
+        ],
+        'kg',
+        'km'
+      );
+      expect(payload[0].sets[0]).toMatchObject({ id: 11, rpe: 8, rir: 2 });
+    });
+
     it('defaults duration_minutes to 0 when the draft has none', () => {
       const payload = buildExercisesPayload([makeDraftExercise()], 'kg', 'km');
       expect(payload[0].duration_minutes).toBe(0);
@@ -1566,7 +1593,7 @@ describe('workoutSession', () => {
         expect(payload[0].sets[0]).not.toHaveProperty('rest_time');
       });
 
-      it('strips all exercise and set IDs when any exercise lacks serverId (mixed fallback)', () => {
+      it('keeps existing exercise and set IDs when a sibling is new', () => {
         const payload = buildExercisesPayload(
           [
             makeDraftExercise({
@@ -1576,7 +1603,6 @@ describe('workoutSession', () => {
                 { clientId: 'c1', serverId: 101, weight: '100', reps: '10' },
               ],
             }),
-            // New exercise without serverId — should force the fallback.
             makeDraftExercise({
               exerciseId: UUID_B,
               sets: [{ clientId: 'c2', weight: '80', reps: '8' }],
@@ -1585,8 +1611,8 @@ describe('workoutSession', () => {
           'kg',
           'km'
         );
-        expect(payload[0]).not.toHaveProperty('id');
-        expect(payload[0].sets[0]).not.toHaveProperty('id');
+        expect(payload[0].id).toBe(UUID_A);
+        expect(payload[0].sets[0].id).toBe(101);
         expect(payload[1]).not.toHaveProperty('id');
         expect(payload[1].sets[0]).not.toHaveProperty('id');
         expect(() =>
@@ -2176,6 +2202,7 @@ describe('workoutSession', () => {
         rest_time: 90,
         notes: null,
         rpe: null,
+        rir: null,
         completed_at: null,
         is_pr: false,
       });
@@ -2190,6 +2217,7 @@ describe('workoutSession', () => {
         rest_time: 90,
         notes: 'felt heavy',
         rpe: 9,
+        rir: null,
         completed_at: null,
         is_pr: false,
       });
@@ -3790,7 +3818,10 @@ describe('workoutSession', () => {
             'ex-2': [{ setNumber: 1, setType: 'normal', weight: 45, reps: 12 }],
           };
           expect(
-            describeActiveSetAssumed(sessionWithSets, '201', previous, {})
+            describeActiveSetAssumed(sessionWithSets, '201', {
+              previousSessionSets: previous,
+              plannedSetValues: {},
+            })
           ).toEqual({
             exerciseName: null,
             setNumber: 1,
@@ -3809,9 +3840,17 @@ describe('workoutSession', () => {
             ],
           };
           expect(
-            describeActiveSetAssumed(sessionWithSets, '102', previous, {})
+            describeActiveSetAssumed(sessionWithSets, '102', {
+              previousSessionSets: previous,
+              plannedSetValues: {},
+            })
           ).toEqual(describeActiveSet(sessionWithSets, '102'));
-          expect(describeActiveSetAssumed(null, '101', {}, {})).toBeNull();
+          expect(
+            describeActiveSetAssumed(null, '101', {
+              previousSessionSets: {},
+              plannedSetValues: {},
+            })
+          ).toBeNull();
         });
       });
     });
@@ -3867,6 +3906,40 @@ describe('workoutSession', () => {
           duration: null,
           distance: null,
         });
+      });
+
+      it('bumps each working set from its own prior weight when progression overload is active', () => {
+        // Ascending/pyramid sets (50, 55 from last session) must each step up
+        // by the increment, not collapse onto one flattened suggested weight.
+        const result = resolveAssumedSetValues(
+          [makeSet(1), makeSet(2)],
+          [prev(50, 10), prev(55, 12)],
+          undefined,
+          { progressionIncrementKg: 5 }
+        );
+        expect(result[0]).toEqual({
+          weight: 55,
+          reps: 10,
+          duration: null,
+          distance: null,
+        });
+        expect(result[1]).toEqual({
+          weight: 60,
+          reps: 12,
+          duration: null,
+          distance: null,
+        });
+      });
+
+      it('leaves warmup sets out of the progression bump', () => {
+        const result = resolveAssumedSetValues(
+          [makeSet(1, { set_type: 'warmup' }), makeSet(2)],
+          [prev(20, 10, 'warmup'), prev(50, 8)],
+          undefined,
+          { progressionIncrementKg: 5 }
+        );
+        expect(result[0].weight).toBe(20);
+        expect(result[1].weight).toBe(55);
       });
 
       it('mirrors the rows above onto sets with no history of their own', () => {
@@ -3992,6 +4065,403 @@ describe('workoutSession', () => {
           reps: null,
           duration: null,
           distance: null,
+        });
+      });
+
+      describe('per-set ramp', () => {
+        const LB = 0.45359237;
+        const lbs = (kg: number | null) =>
+          kg == null ? null : Math.round((kg / LB) * 100) / 100;
+        // +10 lb, as numeric(6,2) kg stores it.
+        const TEN_LB_KG = 4.54;
+        const planned = (weights: (number | null)[]) =>
+          Object.fromEntries(
+            weights.map((w, i) => [String(i + 1), { weight: w, reps: 5 }])
+          );
+
+        it('ramps working sets from the first planned working weight', () => {
+          const result = resolveAssumedSetValues(
+            [makeSet(1), makeSet(2), makeSet(3)],
+            undefined,
+            planned([185 * LB, 185 * LB, 185 * LB]),
+            { rampIncrementKg: TEN_LB_KG, weightUnit: 'lbs' }
+          );
+          expect(result.map((r) => lbs(r.weight))).toEqual([185, 195, 205]);
+        });
+
+        it('ramps down with a negative increment', () => {
+          const result = resolveAssumedSetValues(
+            [makeSet(1), makeSet(2), makeSet(3)],
+            undefined,
+            planned([185 * LB, null, null]),
+            { rampIncrementKg: -TEN_LB_KG, weightUnit: 'lbs' }
+          );
+          expect(result.map((r) => lbs(r.weight))).toEqual([185, 175, 165]);
+        });
+
+        it('rounds kg ramps to a loadable 0.25 kg', () => {
+          const result = resolveAssumedSetValues(
+            [makeSet(1), makeSet(2)],
+            undefined,
+            planned([50, 50]),
+            { rampIncrementKg: 1.13, weightUnit: 'kg' }
+          );
+          expect(result[1].weight).toBe(51.25);
+        });
+
+        it('skips warm-up and drop sets, which neither ramp nor seed the base', () => {
+          const result = resolveAssumedSetValues(
+            [
+              makeSet(1, { set_type: 'warmup' }),
+              makeSet(2),
+              makeSet(3),
+              makeSet(4, { set_type: 'drop' }),
+            ],
+            undefined,
+            {
+              '1': { weight: 40, reps: 10 },
+              '2': { weight: 100, reps: 5 },
+              '3': { weight: 100, reps: 5 },
+              '4': { weight: 80, reps: 8 },
+            },
+            { rampIncrementKg: 5, weightUnit: 'kg' }
+          );
+          expect(result.map((r) => r.weight)).toEqual([40, 100, 105, 80]);
+        });
+
+        it('does not carry a heavier logged set 1 onto later sets (3a stays declined)', () => {
+          const result = resolveAssumedSetValues(
+            [makeSet(1, { weight: 225 * LB, reps: 5 }), makeSet(2), makeSet(3)],
+            undefined,
+            planned([185 * LB, 185 * LB, 185 * LB]),
+            { rampIncrementKg: TEN_LB_KG, weightUnit: 'lbs' }
+          );
+          expect(lbs(result[1].weight)).toBe(195);
+          expect(lbs(result[2].weight)).toBe(205);
+        });
+
+        it("ramps from set 1's history, overriding later sets' own history", () => {
+          const result = resolveAssumedSetValues(
+            [makeSet(1), makeSet(2), makeSet(3)],
+            [prev(100, 5), prev(100, 5), prev(90, 5)],
+            undefined,
+            { rampIncrementKg: 5, weightUnit: 'kg' }
+          );
+          expect(result.map((r) => r.weight)).toEqual([100, 105, 110]);
+          // Reps still come from each set's own history.
+          expect(result.map((r) => r.reps)).toEqual([5, 5, 5]);
+        });
+
+        it('steps from the progression-bumped base when both are on', () => {
+          const result = resolveAssumedSetValues(
+            [makeSet(1), makeSet(2)],
+            [prev(100, 8), prev(100, 8)],
+            undefined,
+            {
+              progressionIncrementKg: 2.5,
+              rampIncrementKg: 5,
+              weightUnit: 'kg',
+            }
+          );
+          expect(result.map((r) => r.weight)).toEqual([102.5, 107.5]);
+        });
+
+        it('leaves placeholders untouched when the ramp is off', () => {
+          const sets = [makeSet(1), makeSet(2)];
+          const history = [prev(100, 8), prev(95, 8)];
+          const off = resolveAssumedSetValues(sets, history, undefined, {
+            rampIncrementKg: null,
+            progressionIncrementKg: 5,
+          });
+          expect(off).toEqual(
+            resolveAssumedSetValues(sets, history, undefined, {
+              progressionIncrementKg: 5,
+            })
+          );
+          expect(
+            resolveAssumedSetValues(sets, history, undefined, {
+              rampIncrementKg: 0,
+            })
+          ).toEqual(resolveAssumedSetValues(sets, history));
+        });
+
+        it('does nothing without a positive base weight (bodyweight)', () => {
+          const result = resolveAssumedSetValues(
+            [makeSet(1), makeSet(2)],
+            undefined,
+            {
+              '1': { weight: null, reps: 10 },
+              '2': { weight: null, reps: 10 },
+            },
+            { rampIncrementKg: 5 }
+          );
+          expect(result.map((r) => r.weight)).toEqual([null, null]);
+        });
+      });
+
+      describe('resolveLiveAssumedSetValues', () => {
+        const exercise = { id: 'ex-1', sets: [makeSet(1), makeSet(2)] };
+        const plannedSetValues = {
+          '1': { weight: 100, reps: 5 },
+          '2': { weight: 100, reps: 5 },
+        };
+
+        it('applies the captured ramp in standard workouts only', () => {
+          const sources = {
+            plannedSetValues,
+            exerciseConfigs: { 'ex-1': { ramp_increment: 5 } },
+            weightUnit: 'kg' as const,
+          };
+          expect(
+            resolveLiveAssumedSetValues(exercise, undefined, sources).map(
+              (r) => r.weight
+            )
+          ).toEqual([100, 105]);
+          expect(
+            resolveLiveAssumedSetValues(exercise, undefined, {
+              ...sources,
+              workoutFormat: 'emom',
+            }).map((r) => r.weight)
+          ).toEqual([100, 100]);
+        });
+
+        it('bumps by the kg progression increment once the rep goal was met', () => {
+          const result = resolveLiveAssumedSetValues(
+            exercise,
+            [prev(100, 8), prev(100, 8)],
+            {
+              plannedSetValues: {},
+              exerciseConfigs: {
+                'ex-1': {
+                  progression_mode: 'rep_goal',
+                  rep_goal: 16,
+                  increment_type: 'weight',
+                  increment_value: 2.5,
+                },
+              },
+              weightUnit: 'lbs',
+            }
+          );
+          expect(result.map((r) => r.weight)).toEqual([102.5, 102.5]);
+        });
+
+        it('raises working-set reps when progression adds reps, warm-ups untouched', () => {
+          const result = resolveLiveAssumedSetValues(
+            {
+              id: 'ex-1',
+              sets: [
+                makeSet(1, { set_type: 'warmup' }),
+                makeSet(2),
+                makeSet(3),
+              ],
+            },
+            [prev(40, 10, 'warmup'), prev(100, 8), prev(100, 8)],
+            {
+              plannedSetValues: {},
+              exerciseConfigs: {
+                'ex-1': {
+                  progression_mode: 'fixed',
+                  rep_goal: 8,
+                  increment_type: 'reps',
+                  increment_value: 1,
+                },
+              },
+            }
+          );
+          expect(result.map((r) => r.reps)).toEqual([10, 9, 9]);
+          expect(result.map((r) => r.weight)).toEqual([40, 100, 100]);
+        });
+
+        describe('adaptive coaching (#1560)', () => {
+          const adaptiveExercise = {
+            id: 'ex-1',
+            exercise_id: 'lib-1',
+            sets: [makeSet(1), makeSet(2)],
+          };
+          const baseSignal = {
+            exercise_id: 'lib-1',
+            last_performed_date: '2026-03-18',
+            days_since_last_performed: 2,
+            last_difficulty: null,
+            last_pain: null,
+            too_easy_streak: 0,
+            too_hard_streak: 0,
+            pain_streak: 0,
+            avg_rpe: null,
+            avg_rir: null,
+            sessions_in_variation_window: 1,
+          };
+          const progressing = {
+            'ex-1': {
+              progression_mode: 'rep_goal' as const,
+              rep_goal: 16,
+              increment_type: 'weight' as const,
+              increment_value: 2.5,
+            },
+          };
+
+          it('lightens the day after pain and cancels the progression bump', () => {
+            const result = resolveLiveAssumedSetValues(
+              adaptiveExercise,
+              [prev(100, 8), prev(100, 8)],
+              {
+                plannedSetValues: {},
+                exerciseConfigs: progressing,
+                weightUnit: 'kg',
+                coachingSignals: {
+                  'lib-1': {
+                    ...baseSignal,
+                    last_pain: 'exercise',
+                    pain_streak: 1,
+                  },
+                },
+              }
+            );
+            expect(result.map((r) => r.weight)).toEqual([90, 90]);
+          });
+
+          it('lightens planned weights when this preset has no history yet', () => {
+            const result = resolveLiveAssumedSetValues(
+              adaptiveExercise,
+              undefined,
+              {
+                plannedSetValues: {
+                  '1': { weight: 100, reps: 5 },
+                  '2': { weight: 100, reps: 5 },
+                },
+                weightUnit: 'kg',
+                coachingSignals: {
+                  'lib-1': { ...baseSignal, last_pain: 'exercise' },
+                },
+              }
+            );
+            expect(result.map((r) => r.weight)).toEqual([90, 90]);
+          });
+
+          it('holds after "too hard" even when the rep goal was met', () => {
+            const result = resolveLiveAssumedSetValues(
+              adaptiveExercise,
+              [prev(100, 8), prev(100, 8)],
+              {
+                plannedSetValues: {},
+                exerciseConfigs: progressing,
+                weightUnit: 'kg',
+                coachingSignals: {
+                  'lib-1': {
+                    ...baseSignal,
+                    last_difficulty: 'too_hard',
+                    too_hard_streak: 1,
+                  },
+                },
+              }
+            );
+            expect(result.map((r) => r.weight)).toEqual([100, 100]);
+          });
+
+          it('adds a step after "too easy" twice without a preset config', () => {
+            const result = resolveLiveAssumedSetValues(
+              adaptiveExercise,
+              [prev(100, 8), prev(100, 8)],
+              {
+                plannedSetValues: {},
+                weightUnit: 'kg',
+                coachingSignals: {
+                  'lib-1': {
+                    ...baseSignal,
+                    last_difficulty: 'too_easy',
+                    too_easy_streak: 2,
+                  },
+                },
+              }
+            );
+            expect(result.map((r) => r.weight)).toEqual([102.5, 102.5]);
+          });
+
+          it('uses the usual suggestion once declined, and in interval formats', () => {
+            const sources = {
+              plannedSetValues: {},
+              exerciseConfigs: progressing,
+              weightUnit: 'kg' as const,
+              coachingSignals: {
+                'lib-1': { ...baseSignal, last_pain: 'exercise' as const },
+              },
+            };
+            expect(
+              resolveLiveAssumedSetValues(
+                adaptiveExercise,
+                [prev(100, 8), prev(100, 8)],
+                { ...sources, declinedAdaptive: { 'ex-1': true } }
+              ).map((r) => r.weight)
+            ).toEqual([102.5, 102.5]);
+            expect(
+              resolveLiveAssumedSetValues(
+                adaptiveExercise,
+                [prev(100, 8), prev(100, 8)],
+                { ...sources, workoutFormat: 'emom' }
+              ).map((r) => r.weight)
+            ).toEqual([102.5, 102.5]);
+          });
+        });
+
+        it('holds weight when the rep goal was missed', () => {
+          const result = resolveLiveAssumedSetValues(
+            exercise,
+            [prev(100, 5), prev(100, 5)],
+            {
+              plannedSetValues: {},
+              exerciseConfigs: {
+                'ex-1': { progression_mode: 'rep_goal', rep_goal: 16 },
+              },
+            }
+          );
+          expect(result.map((r) => r.weight)).toEqual([100, 100]);
+        });
+      });
+
+      describe('evaluateExerciseProgression', () => {
+        it('converts the kg increment into the display unit for the engine', () => {
+          const LB = 0.45359237;
+          const result = evaluateExerciseProgression(
+            {
+              progression_mode: 'fixed',
+              rep_goal: 8,
+              increment_type: 'weight',
+              increment_value: 5 * LB,
+            },
+            [{ set_type: 'normal' }],
+            [prev(100 * LB, 8)],
+            'lbs'
+          );
+          expect(result?.status).toBe('PROGRESSION_WEIGHT_INCREASE');
+          expect(result?.suggestedWeight).toBeCloseTo(105, 5);
+        });
+
+        it('treats a step-load increment as reps even when stored as weight', () => {
+          // AI-created step-load presets default increment_type to weight.
+          const result = evaluateExerciseProgression(
+            {
+              progression_mode: 'step_load',
+              rep_goal: 24,
+              increment_type: 'weight',
+              increment_value: 5,
+            },
+            [
+              { set_type: 'normal' },
+              { set_type: 'normal' },
+              { set_type: 'normal' },
+            ],
+            [prev(100, 8), prev(100, 8), prev(100, 8)],
+            'lbs'
+          );
+          expect(result?.status).toBe('PROGRESSION_REPS_INCREASE');
+          // 24 + 5 reps, not 24 + 11.02 (5 "kg" read as pounds).
+          expect(result?.suggestedRepGoal).toBe(29);
+        });
+
+        it('is null when nothing is configured', () => {
+          expect(
+            evaluateExerciseProgression({}, [], [prev(100, 8)], 'kg')
+          ).toBeNull();
         });
       });
 
@@ -5007,6 +5477,90 @@ describe('workoutSession', () => {
       return { completedSetIds, plannedSetValues: {} };
     };
 
+    describe('values the ramp or progression filled in', () => {
+      // Preset: 100 × 5 twice, +5 kg ramp. Logged without typing: 100 / 105.
+      const rampPreset = () =>
+        makeTargetPreset({
+          exercises: [
+            makeTargetPresetExercise({
+              ramp_increment: 5,
+              sets: [
+                makeTargetPresetSet(),
+                makeTargetPresetSet({ id: 902, set_number: 2 }),
+              ],
+            }),
+          ],
+        });
+      const rampSession = (secondWeight: number) =>
+        makePreset({
+          exercises: [
+            makeSessionExercise({
+              sets: [
+                makeSessionSet(),
+                makeSessionSet({
+                  id: 102,
+                  set_number: 2,
+                  weight: secondWeight,
+                }),
+              ],
+            }),
+          ],
+        });
+      const opts = (session: PresetSession) => ({
+        ...allCompleted(session),
+        plannedSetValues: {
+          '101': { weight: 100, reps: 5 },
+          '102': { weight: 100, reps: 5 },
+        },
+        assumeSources: {
+          previousSessionSets: {},
+          exerciseConfigs: { 'entry-1': { ramp_increment: 5 } },
+          weightUnit: 'kg' as const,
+        },
+      });
+
+      it('does not prompt for a set logged as the ramp pre-filled it', () => {
+        const session = rampSession(105);
+        expect(
+          buildPresetUpdateExercises(session, rampPreset(), opts(session))
+        ).toBeNull();
+      });
+
+      it('keeps the preset weight for ramped sets when something else changed', () => {
+        const session = rampSession(105);
+        session.exercises[0]!.sets[0] = makeSessionSet({ reps: 6 });
+        const payload = buildPresetUpdateExercises(
+          session,
+          rampPreset(),
+          opts(session)
+        );
+        expect(
+          payload?.[0]?.sets?.map((set) => [set.weight, set.reps])
+        ).toEqual([
+          [100, 6],
+          [100, 5],
+        ]);
+      });
+
+      it('still counts a weight the lifter changed', () => {
+        const session = rampSession(110);
+        const payload = buildPresetUpdateExercises(
+          session,
+          rampPreset(),
+          opts(session)
+        );
+        expect(payload?.[0]?.sets?.[1]?.weight).toBe(110);
+      });
+
+      it('counts every difference without the live sources (old snapshots)', () => {
+        const session = rampSession(105);
+        const { assumeSources: _ignored, ...withoutSources } = opts(session);
+        expect(
+          buildPresetUpdateExercises(session, rampPreset(), withoutSources)
+        ).not.toBeNull();
+      });
+    });
+
     it('returns null when the performed session matches the preset', () => {
       const session = makePreset({ exercises: [makeSessionExercise()] });
       expect(
@@ -5630,5 +6184,80 @@ describe('workoutSession', () => {
         buildPresetUpdateExercises(session, preset, allCompleted(session))
       ).toBeNull();
     });
+  });
+});
+
+describe('summarizeWorkoutHeartRate', () => {
+  it('returns null when no exercise carries a heart rate', () => {
+    expect(summarizeWorkoutHeartRate([])).toBeNull();
+    expect(
+      summarizeWorkoutHeartRate([
+        { avg_heart_rate: null, duration_minutes: 10 },
+      ])
+    ).toBeNull();
+    // Zero is not a reading; it is the absence of one.
+    expect(
+      summarizeWorkoutHeartRate([{ avg_heart_rate: 0, duration_minutes: 10 }])
+    ).toBeNull();
+  });
+
+  it('weights the average by duration', () => {
+    // 30 min at 120 and 10 min at 160 is 130, not the 140 a plain mean gives.
+    const summary = summarizeWorkoutHeartRate([
+      { avg_heart_rate: 120, duration_minutes: 30 },
+      { avg_heart_rate: 160, duration_minutes: 10 },
+    ]);
+    expect(summary?.avgBpm).toBeCloseTo(130);
+  });
+
+  it('falls back to a plain mean when any duration is missing', () => {
+    // A zero-duration entry would contribute nothing to a weighted mean and
+    // silently vanish from the average, so the whole calculation steps back.
+    const summary = summarizeWorkoutHeartRate([
+      { avg_heart_rate: 120, duration_minutes: 30 },
+      { avg_heart_rate: 160, duration_minutes: 0 },
+    ]);
+    expect(summary?.avgBpm).toBeCloseTo(140);
+  });
+
+  it('accepts a duration that arrives as a string', () => {
+    const summary = summarizeWorkoutHeartRate([
+      { avg_heart_rate: 120, duration_minutes: '30' },
+      { avg_heart_rate: 160, duration_minutes: '10' },
+    ]);
+    expect(summary?.avgBpm).toBeCloseTo(130);
+  });
+
+  it('takes the highest per-exercise maximum, exactly', () => {
+    const summary = summarizeWorkoutHeartRate([
+      { avg_heart_rate: 120, max_heart_rate: 150, duration_minutes: 10 },
+      { avg_heart_rate: 130, max_heart_rate: 171, duration_minutes: 10 },
+    ]);
+    expect(summary?.maxBpm).toBe(171);
+  });
+
+  it('reports a null maximum when only averages were recorded', () => {
+    const summary = summarizeWorkoutHeartRate([
+      { avg_heart_rate: 120, duration_minutes: 10 },
+    ]);
+    expect(summary?.avgBpm).toBeCloseTo(120);
+    expect(summary?.maxBpm).toBeNull();
+  });
+});
+
+describe('firstSetInputField', () => {
+  it('focuses the first value cell for each modality', () => {
+    expect(firstSetInputField('weight_reps')).toBe('weight');
+    expect(firstSetInputField('reps_only')).toBe('reps');
+    expect(firstSetInputField('duration')).toBe('duration');
+    expect(firstSetInputField('duration_distance')).toBe('duration');
+  });
+});
+
+describe('wodScoreFormat', () => {
+  it('reads the shared-schema key and the legacy mobile key', () => {
+    expect(wodScoreFormat({ workout_format: 'amrap' })).toBe('amrap');
+    expect(wodScoreFormat({ format: 'for_time' })).toBe('for_time');
+    expect(wodScoreFormat({})).toBeNull();
   });
 });

@@ -283,7 +283,8 @@ function buildHrZones(
  */
 function transformFitActivity(
   messages: FitMessages,
-  buffer: Buffer
+  buffer: Buffer,
+  notesLabel = 'Garmin FIT Import'
 ): FitTransformResult {
   const sessions: SessionMesg[] = messages.sessionMesgs ?? [];
   if (sessions.length === 0) {
@@ -432,7 +433,7 @@ function transformFitActivity(
         ? Math.round(session.avgHeartRate)
         : null,
     steps,
-    notes: `Garmin FIT Import: ${activityName} (${sport})`,
+    notes: `${notesLabel}: ${activityName} (${sport})`,
     source_id: sourceId,
   };
 

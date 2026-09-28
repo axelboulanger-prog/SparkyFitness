@@ -2,6 +2,7 @@ import { getSystemClient } from '../db/poolManager.js';
 import { log } from '../config/logging.js';
 import NodeCache from 'node-cache';
 import type { OidcProviderUpdate } from '../schemas/oidcProviderSchemas.js';
+import type { PoolClient } from 'pg';
 const discoveryCache = new NodeCache({ stdTTL: 3600 });
 
 /** Falls back to Better Auth's configuration when the legacy client ID column is unset. */
@@ -189,54 +190,64 @@ async function getOidcProviderById(id: string) {
     client.release();
   }
 }
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function createOidcProvider(providerData: any) {
+/** Prepares stored configuration and discovered endpoints without writing to the database. */
+async function prepareOidcProvider(
+  providerData: OidcProviderUpdate,
+  providerId: string
+) {
+  const config = JSON.stringify({
+    display_name: providerData.display_name,
+    logo_url: providerData.logo_url,
+    auto_register: providerData.auto_register || false,
+    is_active:
+      providerData.is_active !== undefined ? providerData.is_active : true,
+    redirect_uris: providerData.redirect_uris || [],
+    response_types: providerData.response_types || ['code'],
+    token_endpoint_auth_method:
+      providerData.token_endpoint_auth_method || 'client_secret_post',
+    signing_algorithm: providerData.signing_algorithm || 'RS256',
+    profile_signing_algorithm: providerData.profile_signing_algorithm || 'none',
+    timeout: providerData.timeout || 30000,
+    is_env_configured: providerData.is_env_configured || false,
+    admin_group: providerData.admin_group,
+  });
+  const discoveryEndpoint =
+    providerData.issuer_url.replace(/\/$/, '') +
+    '/.well-known/openid-configuration';
+  const endpoints = await fetchOidcEndpoints(discoveryEndpoint);
+  const baseUrl = getBaseUrl();
+  const callbackBase = `${baseUrl}/api/auth`;
+  const oidcConfig = {
+    issuer: endpoints.issuer || providerData.issuer_url,
+    clientId: providerData.client_id,
+    clientSecret: providerData.client_secret,
+    scopes: (providerData.scope || 'openid email profile')
+      .split(' ')
+      .filter(Boolean),
+    discoveryEndpoint: discoveryEndpoint,
+    pkce: true,
+    redirectURI: `${callbackBase}/sso/callback/${providerId}`,
+    jwksEndpoint: endpoints.jwksEndpoint,
+    tokenEndpoint: endpoints.tokenEndpoint,
+    authorizationEndpoint: endpoints.authorizationEndpoint,
+    userInfoEndpoint: endpoints.userInfoEndpoint,
+    tokenEndpointAuthentication:
+      providerData.token_endpoint_auth_method || 'client_secret_post',
+    overrideUserInfo: true,
+  };
+  return { config, discoveryEndpoint, endpoints, oidcConfig };
+}
+
+/** Creates a provider with default configuration for omitted settings. */
+async function createOidcProvider(providerData: OidcProviderUpdate) {
   const client = await getSystemClient();
   try {
-    const config = JSON.stringify({
-      display_name: providerData.display_name,
-      logo_url: providerData.logo_url,
-      auto_register: providerData.auto_register || false,
-      is_active:
-        providerData.is_active !== undefined ? providerData.is_active : true,
-      redirect_uris: providerData.redirect_uris || [],
-      response_types: providerData.response_types || ['code'],
-      token_endpoint_auth_method:
-        providerData.token_endpoint_auth_method || 'client_secret_post',
-      signing_algorithm: providerData.signing_algorithm || 'RS256',
-      profile_signing_algorithm:
-        providerData.profile_signing_algorithm || 'none',
-      timeout: providerData.timeout || 30000,
-      is_env_configured: providerData.is_env_configured || false,
-      admin_group: providerData.admin_group || null,
-    });
     const providerId = providerData.provider_id || `oidc-${Date.now()}`;
-    const discoveryEndpoint =
-      providerData.issuer_url.replace(/\/$/, '') +
-      '/.well-known/openid-configuration';
-    // Fetch OIDC endpoints from discovery document
-    const endpoints = await fetchOidcEndpoints(discoveryEndpoint);
-    // Construct native oidcConfig for Better Auth (object for JSONB column; same base as auth.baseURL)
-    const baseUrl = getBaseUrl();
-    const callbackBase = `${baseUrl}/api/auth`;
-    const oidcConfig = {
-      issuer: endpoints.issuer || providerData.issuer_url,
-      clientId: providerData.client_id,
-      clientSecret: providerData.client_secret,
-      scopes: (providerData.scope || 'openid email profile')
-        .split(' ')
-        .filter(Boolean),
-      discoveryEndpoint: discoveryEndpoint,
-      pkce: true,
-      redirectURI: `${callbackBase}/sso/callback/${providerId}`,
-      jwksEndpoint: endpoints.jwksEndpoint,
-      tokenEndpoint: endpoints.tokenEndpoint,
-      authorizationEndpoint: endpoints.authorizationEndpoint,
-      userInfoEndpoint: endpoints.userInfoEndpoint,
-      tokenEndpointAuthentication:
-        providerData.token_endpoint_auth_method || 'client_secret_post',
-      overrideUserInfo: true,
-    };
+    const { config, discoveryEndpoint, endpoints, oidcConfig } =
+      await prepareOidcProvider(
+        { ...providerData, admin_group: providerData.admin_group || null },
+        providerId
+      );
     const result = await client.query(
       `INSERT INTO "sso_provider" 
             (provider_id, issuer, domain, client_id, client_secret, scopes, discovery_endpoint, 
@@ -272,6 +283,93 @@ async function createOidcProvider(providerData: any) {
     client.release();
   }
 }
+/** Saves the environment provider and removes stale environment providers atomically. */
+async function upsertEnvOidcProvider(
+  providerData: OidcProviderUpdate & {
+    provider_id: string;
+    client_secret: string;
+    domain: string;
+  }
+): Promise<string[]> {
+  const providerId = providerData.provider_id;
+  const { config, discoveryEndpoint, endpoints, oidcConfig } =
+    await prepareOidcProvider(providerData, providerId);
+  const client: PoolClient = await getSystemClient();
+  let rollbackFailed = false;
+  let removed: string[];
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtext('oidc_environment_provider_reconciliation'))"
+    );
+    await client.query(
+      `INSERT INTO "sso_provider"
+       (provider_id, issuer, domain, client_id, client_secret, scopes, discovery_endpoint,
+        authorization_endpoint, token_endpoint, jwks_endpoint, userinfo_endpoint,
+        additional_config, oidc_config)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
+       ON CONFLICT (provider_id) DO UPDATE SET
+         issuer = EXCLUDED.issuer, domain = EXCLUDED.domain,
+         client_id = EXCLUDED.client_id, client_secret = EXCLUDED.client_secret,
+         scopes = EXCLUDED.scopes, discovery_endpoint = EXCLUDED.discovery_endpoint,
+         authorization_endpoint = EXCLUDED.authorization_endpoint,
+         token_endpoint = EXCLUDED.token_endpoint, jwks_endpoint = EXCLUDED.jwks_endpoint,
+         userinfo_endpoint = EXCLUDED.userinfo_endpoint,
+         additional_config = EXCLUDED.additional_config, oidc_config = EXCLUDED.oidc_config,
+         updated_at = NOW()`,
+      [
+        providerId,
+        endpoints.issuer || providerData.issuer_url,
+        providerData.domain,
+        providerData.client_id,
+        providerData.client_secret,
+        providerData.scope || 'openid email profile',
+        discoveryEndpoint,
+        endpoints.authorizationEndpoint,
+        endpoints.tokenEndpoint,
+        endpoints.jwksEndpoint,
+        endpoints.userInfoEndpoint,
+        config,
+        oidcConfig,
+      ]
+    );
+    const result = await client.query<{ provider_id: string }>(
+      `DELETE FROM "sso_provider"
+       WHERE additional_config::jsonb->>'is_env_configured' = 'true'
+       AND provider_id != $1
+       RETURNING provider_id`,
+      [providerId]
+    );
+    removed = result.rows.map((row) => row.provider_id);
+    await client.query('COMMIT');
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      rollbackFailed = true;
+      log(
+        'error',
+        'Failed to roll back environment OIDC configuration:',
+        rollbackError
+      );
+    }
+    throw error;
+  } finally {
+    client.release(rollbackFailed);
+  }
+  try {
+    const { syncTrustedProviders } = await import('../auth.js');
+    await syncTrustedProviders();
+  } catch (error) {
+    log(
+      'error',
+      'Failed to refresh trusted providers after environment configuration:',
+      error
+    );
+  }
+  return removed;
+}
+
 /** Update the resolved provider, retaining its provider ID unless explicitly replaced. */
 async function updateOidcProvider(
   id: string,
@@ -287,57 +385,21 @@ async function updateOidcProvider(
     if (typeof clientId !== 'string' || clientId.length === 0) {
       throw new Error('OIDC client ID is required');
     }
-    const config = JSON.stringify({
-      display_name: providerData.display_name,
-      logo_url: providerData.logo_url,
-      auto_register: providerData.auto_register || false,
-      is_active:
-        providerData.is_active !== undefined ? providerData.is_active : true,
-      redirect_uris: providerData.redirect_uris || [],
-      response_types: providerData.response_types || ['code'],
-      token_endpoint_auth_method:
-        providerData.token_endpoint_auth_method || 'client_secret_post',
-      signing_algorithm: providerData.signing_algorithm || 'RS256',
-      profile_signing_algorithm:
-        providerData.profile_signing_algorithm || 'none',
-      timeout: providerData.timeout || 30000,
-      is_env_configured: providerData.is_env_configured || false,
-      admin_group:
-        providerData.admin_group !== undefined
-          ? providerData.admin_group
-          : existing?.admin_group || null,
-    });
-    const discoveryEndpoint =
-      providerData.issuer_url.replace(/\/$/, '') +
-      '/.well-known/openid-configuration';
-    const clientSecret =
-      providerData.client_secret && providerData.client_secret !== '*****'
-        ? providerData.client_secret
-        : existing.client_secret;
-    // Fetch OIDC endpoints from discovery document
-    const endpoints = await fetchOidcEndpoints(discoveryEndpoint);
-    // Construct native oidcConfig for Better Auth (same base as auth.baseURL; JSONB)
-    const baseUrl = getBaseUrl();
-    const callbackBase = `${baseUrl}/api/auth`;
+    const clientSecret = providerData.client_secret || existing.client_secret;
     const providerIdToUse = providerData.provider_id || existing.provider_id;
-    const oidcConfig = {
-      issuer: endpoints.issuer || providerData.issuer_url,
-      clientId,
-      clientSecret: clientSecret,
-      scopes: (providerData.scope || 'openid email profile')
-        .split(' ')
-        .filter(Boolean),
-      discoveryEndpoint: discoveryEndpoint,
-      pkce: true,
-      redirectURI: `${callbackBase}/sso/callback/${providerIdToUse}`,
-      jwksEndpoint: endpoints.jwksEndpoint,
-      tokenEndpoint: endpoints.tokenEndpoint,
-      authorizationEndpoint: endpoints.authorizationEndpoint,
-      userInfoEndpoint: endpoints.userInfoEndpoint,
-      tokenEndpointAuthentication:
-        providerData.token_endpoint_auth_method || 'client_secret_post',
-      overrideUserInfo: true,
-    };
+    const { config, discoveryEndpoint, endpoints, oidcConfig } =
+      await prepareOidcProvider(
+        {
+          ...providerData,
+          client_id: clientId,
+          client_secret: clientSecret,
+          admin_group:
+            providerData.admin_group !== undefined
+              ? providerData.admin_group
+              : existing.admin_group || null,
+        },
+        providerIdToUse
+      );
     const query = `
             UPDATE "sso_provider" 
             SET issuer=$1, domain=$2, client_id=$3, client_secret=$4, scopes=$5, discovery_endpoint=$6, 
@@ -451,6 +513,7 @@ export { getOidcProviderById };
 export { getActiveOidcProviderIds };
 export { createOidcProvider };
 export { updateOidcProvider };
+export { upsertEnvOidcProvider };
 export { deleteOidcProvider };
 export { setProviderLogo };
 export default {
@@ -459,6 +522,7 @@ export default {
   getActiveOidcProviderIds,
   createOidcProvider,
   updateOidcProvider,
+  upsertEnvOidcProvider,
   deleteOidcProvider,
   setProviderLogo,
 };

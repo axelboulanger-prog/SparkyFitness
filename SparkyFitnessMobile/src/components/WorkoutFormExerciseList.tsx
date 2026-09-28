@@ -52,6 +52,7 @@ import type {
 } from '../types/drafts';
 import type { Exercise } from '../types/exercise';
 import type { GetImageSource } from '../hooks/useExerciseImageSource';
+import type { ExerciseProgressionPatch } from '../hooks/draftExercisesSlice';
 
 interface WorkoutFormExerciseListProps {
   exercises: WorkoutDraftExercise[];
@@ -99,7 +100,10 @@ interface WorkoutFormExerciseListProps {
   onAddSet: (exerciseClientId: string) => void;
   onRemoveExercise: (exercise: WorkoutDraftExercise) => void;
   setExerciseRest: (exerciseClientId: string, seconds: number) => void;
-  setExerciseProgression?: (exerciseClientId: string, patch: any) => void;
+  setExerciseProgression?: (
+    exerciseClientId: string,
+    patch: ExerciseProgressionPatch
+  ) => void;
   /**
    * Enables the per-exercise inline calories field (workout edit). Absent for
    * the create and preset forms, which have no stored calories to override.
@@ -348,6 +352,9 @@ const WorkoutFormExerciseList = forwardRef<
       if (patch.rpe !== undefined) {
         updateSetMeta(owner, setId, { rpe: patch.rpe });
       }
+      if (patch.rir !== undefined) {
+        updateSetMeta(owner, setId, { rir: patch.rir });
+      }
       if (patch.notes !== undefined) {
         updateSetMeta(owner, setId, { notes: patch.notes });
       }
@@ -541,8 +548,11 @@ const WorkoutFormExerciseList = forwardRef<
   const metricColumn = useAppPreferencesStore(
     (s) => s.activeWorkoutMetricColumn
   );
+  // Presets store no RPE or RIR, so both effort columns fall back to volume.
   const effectiveMetricColumn =
-    !rpeEditable && metricColumn === 'rpe' ? 'volume' : metricColumn;
+    !rpeEditable && (metricColumn === 'rpe' || metricColumn === 'rir')
+      ? 'volume'
+      : metricColumn;
   const [metricMenu, setMetricMenu] = useState<{
     anchor: AnchorRect;
     clampedToRpe: boolean;

@@ -2761,7 +2761,7 @@ describe('handleWorkout telemetry cache handoff and budget allocation', () => {
       identifier === HR_ID ? [{ startDate: hoursAgo(2), quantity: 132 }] : []
     );
 
-    expect(await readWorkouts(3)).toEqual([`w-hr:${end}`]);
+    expect(await readWorkouts(3)).toEqual([`w-hr:${end}:v2`]);
   });
 
   test('a workout with nothing beyond its summary is staged too — the reads that proved it must not repeat (#2191)', async () => {
@@ -2770,7 +2770,7 @@ describe('handleWorkout telemetry cache handoff and budget allocation', () => {
     const end = hoursAgo(2);
     mockQueryWorkoutSamples.mockResolvedValue([workout('w-empty', end)]);
 
-    expect(await readWorkouts(3)).toEqual([`w-empty:${end}`]);
+    expect(await readWorkouts(3)).toEqual([`w-empty:${end}:v2`]);
   });
 
   test('a failed series read is NOT cached as an empty result', async () => {
@@ -2800,8 +2800,8 @@ describe('handleWorkout telemetry cache handoff and budget allocation', () => {
 
     const staged = await readWorkouts(2);
 
-    expect(staged).toEqual([`newest:${r1}`, `middle:${r2}`]);
-    expect(staged).not.toContain(`oldest:${r3}`);
+    expect(staged).toEqual([`newest:${r1}:v2`, `middle:${r2}:v2`]);
+    expect(staged).not.toContain(`oldest:${r3}:v2`);
   });
 
   test('an already-collected workout neither consumes a slot nor gets re-read', async () => {
@@ -2811,8 +2811,8 @@ describe('handleWorkout telemetry cache handoff and budget allocation', () => {
       workout('already', r1),
       workout('fresh', r2),
     ]);
-    await markEnrichedSessions([`already:${r1}`]);
+    await markEnrichedSessions([`already:${r1}:v2`]);
 
-    expect(await readWorkouts(1)).toEqual([`fresh:${r2}`]);
+    expect(await readWorkouts(1)).toEqual([`fresh:${r2}:v2`]);
   });
 });

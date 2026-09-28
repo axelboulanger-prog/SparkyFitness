@@ -38,6 +38,7 @@ jest.mock('@/hooks/Exercises/useExerciseEntries', () => ({
     mutateAsync: (...args: unknown[]) => mockCreatePresetSession(...args),
     isPending: false,
   }),
+  useWorkoutLocations: () => ({ data: ['Home Gym', 'Downtown'] }),
 }));
 
 const presetFixture: WorkoutPreset = {

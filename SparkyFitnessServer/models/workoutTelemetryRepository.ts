@@ -135,10 +135,12 @@ export async function _bulkInsertExerciseEntryLapsWithClient(
       lap.avg_power_watts ?? null,
       lap.elevation_gain_meters ?? null,
       lap.elevation_loss_meters ?? null,
+      lap.moving_time_seconds ?? null,
+      lap.avg_moving_speed_mps ?? null,
     ]);
     const query = format(
       `INSERT INTO exercise_entry_laps
-        (user_id, exercise_entry_id, entry_date, lap_index, start_time, end_time, duration_seconds, distance_meters, calories, avg_heart_rate, max_heart_rate, avg_respiration_brpm, max_respiration_brpm, avg_speed_mps, max_speed_mps, avg_cadence, avg_power_watts, elevation_gain_meters, elevation_loss_meters)
+        (user_id, exercise_entry_id, entry_date, lap_index, start_time, end_time, duration_seconds, distance_meters, calories, avg_heart_rate, max_heart_rate, avg_respiration_brpm, max_respiration_brpm, avg_speed_mps, max_speed_mps, avg_cadence, avg_power_watts, elevation_gain_meters, elevation_loss_meters, moving_time_seconds, avg_moving_speed_mps)
        VALUES %L
        ON CONFLICT (exercise_entry_id, lap_index) DO UPDATE SET
          entry_date = EXCLUDED.entry_date,
@@ -156,7 +158,9 @@ export async function _bulkInsertExerciseEntryLapsWithClient(
          avg_cadence = EXCLUDED.avg_cadence,
          avg_power_watts = EXCLUDED.avg_power_watts,
          elevation_gain_meters = EXCLUDED.elevation_gain_meters,
-         elevation_loss_meters = EXCLUDED.elevation_loss_meters
+         elevation_loss_meters = EXCLUDED.elevation_loss_meters,
+         moving_time_seconds = EXCLUDED.moving_time_seconds,
+         avg_moving_speed_mps = EXCLUDED.avg_moving_speed_mps
        RETURNING *`,
       values
     );
@@ -291,6 +295,56 @@ export async function bulkInsertExerciseEntryHrZones(
   }
 }
 
+/**
+ * Drops every zone row for an entry, then inserts `zones`.
+ *
+ * The watch-telemetry route re-posts the accumulated series on each flush.
+ * Upsert-only left stale `zone_index` rows behind when a later series (no
+ * DOB, higher observed max) shifted the floors and occupied fewer zones.
+ */
+export async function replaceExerciseEntryHrZones(
+  userId: string,
+  actingUserId: string,
+  exerciseEntryId: string,
+  zones: ExerciseEntryHrZonesInitializer[]
+): Promise<ExerciseEntryHrZones[]> {
+  const client = await getClient(userId, actingUserId);
+  try {
+    await client.query('BEGIN');
+    try {
+      const rows = await _replaceExerciseEntryHrZonesWithClient(
+        client as unknown as TelemetryDbClient,
+        userId,
+        exerciseEntryId,
+        zones
+      );
+      await client.query('COMMIT');
+      return rows;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    }
+  } finally {
+    if (client && typeof client.release === 'function') client.release();
+  }
+}
+
+/** Same replace as above, joining a caller's open transaction. */
+export async function _replaceExerciseEntryHrZonesWithClient(
+  client: TelemetryDbClient,
+  userId: string,
+  exerciseEntryId: string,
+  zones: ExerciseEntryHrZonesInitializer[]
+): Promise<ExerciseEntryHrZones[]> {
+  await client.query(
+    `DELETE FROM exercise_entry_hr_zones
+     WHERE exercise_entry_id = $1 AND user_id = $2`,
+    [exerciseEntryId, userId]
+  );
+  if (!zones || zones.length === 0) return [];
+  return _bulkInsertExerciseEntryHrZonesWithClient(client, userId, zones);
+}
+
 export async function _bulkInsertExerciseEntryHrZonesWithClient(
   client: TelemetryDbClient,
   userId: string,
@@ -324,19 +378,29 @@ export async function _bulkInsertExerciseEntryHrZonesWithClient(
   }
 }
 
+export async function getHrZonesForExerciseEntryWithClient(
+  client: TelemetryDbClient,
+  exerciseEntryId: string
+): Promise<ExerciseEntryHrZones[]> {
+  const res = (await client.query(
+    `SELECT * FROM exercise_entry_hr_zones
+     WHERE exercise_entry_id = $1
+     ORDER BY zone_index ASC`,
+    [exerciseEntryId]
+  )) as { rows: ExerciseEntryHrZones[] };
+  return res.rows;
+}
+
 export async function getHrZonesForExerciseEntry(
   exerciseEntryId: string,
   actingUserId: string
 ): Promise<ExerciseEntryHrZones[]> {
   const client = await getClient(actingUserId);
   try {
-    const res = (await client.query(
-      `SELECT * FROM exercise_entry_hr_zones
-       WHERE exercise_entry_id = $1
-       ORDER BY zone_index ASC`,
-      [exerciseEntryId]
-    )) as { rows: ExerciseEntryHrZones[] };
-    return res.rows;
+    return await getHrZonesForExerciseEntryWithClient(
+      client as unknown as TelemetryDbClient,
+      exerciseEntryId
+    );
   } finally {
     if (client && typeof client.release === 'function') client.release();
   }

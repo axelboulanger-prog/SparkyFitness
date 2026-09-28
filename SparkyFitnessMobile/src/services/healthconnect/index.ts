@@ -25,6 +25,7 @@ import {
   type TelemetryRunContext,
 } from '../shared/telemetryBudget';
 import {
+  enrichedSessionOrder,
   hasEnrichedSession,
   isWithinTelemetryGracePeriod,
   shouldCacheEnrichedSession,
@@ -1462,7 +1463,22 @@ export const enrichExerciseSessions = async (
   let skippedAlreadyCollected = 0;
   const allowGraceWindowClaim = createGraceWindowClaimLimiter(ctx.budget);
   const deferredGraceSessions: unknown[] = [];
-  for (const record of byNewest) {
+  // A forced run re-reads cached sessions, so the cache no longer thins the
+  // candidates and the budget alone decides. Taken newest-first that would
+  // pick the same few every run and never reach the rest of the range, so
+  // order by how long ago each was collected: never-collected first, then
+  // least recently collected. Re-read sessions are re-committed to the back
+  // of the cache, so the next forced run continues where this one stopped.
+  const selectionOrder = ctx.force ? await enrichedSessionOrder() : null;
+  const collectionRank = (record: unknown): number => {
+    const key = sessionCacheKey(record);
+    if (!key || !selectionOrder) return -1;
+    return selectionOrder.get(key) ?? -1;
+  };
+  const candidates = selectionOrder
+    ? [...byNewest].sort((a, b) => collectionRank(a) - collectionRank(b))
+    : byNewest;
+  for (const record of candidates) {
     const rec = record as Record<string, unknown>;
     if (typeof rec.startTime !== 'string' || typeof rec.endTime !== 'string') {
       skippedInvalid++;
@@ -1482,8 +1498,9 @@ export const enrichExerciseSessions = async (
     }
     // Already-collected sessions neither consume a slot nor get re-read, so a
     // bounded budget works through the backlog across syncs instead of
-    // re-picking the same newest few every run (#2191).
-    if (await hasEnrichedSession(sessionCacheKey(record))) {
+    // re-picking the same newest few every run (#2191). A forced run re-reads
+    // them anyway — that is the user asking for exactly this window again.
+    if (!ctx.force && (await hasEnrichedSession(sessionCacheKey(record)))) {
       skippedAlreadyCollected++;
       continue;
     }

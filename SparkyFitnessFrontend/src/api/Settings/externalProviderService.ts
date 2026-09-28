@@ -1,7 +1,7 @@
 import { ExternalDataProvider } from '@/pages/Settings/ExternalProviderSettings';
 import { apiCall } from '@/api/api';
 import { DataProvider } from '@/types/settings';
-import { ExternalProviderTypes } from '@workspace/shared';
+import { ExternalProviderTypes, CorosSyncResult } from '@workspace/shared';
 
 export const getExternalDataProviders = async (): Promise<DataProvider[]> => {
   return apiCall('/external-providers', {
@@ -62,6 +62,7 @@ export const createExternalProvider = async (
         'yazio',
         'norish',
         'openfoodfacts',
+        'coros_mcp',
       ].includes(payload.provider_type)
         ? payload.base_url || null
         : null,
@@ -73,6 +74,7 @@ export const createExternalProvider = async (
         'googlehealth',
         'strava',
         'polar',
+        'coros_mcp',
       ].includes(payload.provider_type)
         ? payload.sync_frequency
         : null,
@@ -114,14 +116,24 @@ export const handleDisconnectWithings = async () => {
   }
 };
 
+/**
+ * Per-sync troubleshooting options. Only sent when an admin has enabled the
+ * mock-data capability; the server ignores them otherwise.
+ */
+export interface SyncMockOptions {
+  saveMockData?: boolean;
+  dataSource?: string;
+}
+
 export const handleManualSync = async (
   startDate?: string,
-  endDate?: string
+  endDate?: string,
+  mock?: SyncMockOptions
 ) => {
   try {
     await apiCall(`/withings/sync`, {
       method: 'POST',
-      body: JSON.stringify({ startDate, endDate }),
+      body: JSON.stringify({ startDate, endDate, ...mock }),
     });
   } catch (error: unknown) {
     console.error('Error initiating manual sync:', error);
@@ -150,13 +162,14 @@ export const handleDisconnectGarmin = async () => {
 
 export const handleManualSyncGarmin = async (
   startDate?: string,
-  endDate?: string
+  endDate?: string,
+  mock?: SyncMockOptions
 ) => {
   try {
     // Call the simplified sync endpoint.
     await apiCall(`/integrations/garmin/sync`, {
       method: 'POST',
-      body: JSON.stringify({ startDate, endDate }),
+      body: JSON.stringify({ startDate, endDate, ...mock }),
     });
   } catch (error: unknown) {
     console.error('Error initiating manual Garmin sync:', error);
@@ -200,12 +213,13 @@ export const handleDisconnectFitbit = async () => {
 
 export const handleManualSyncFitbit = async (
   startDate?: string,
-  endDate?: string
+  endDate?: string,
+  mock?: SyncMockOptions
 ) => {
   try {
     await apiCall(`/integrations/fitbit/sync`, {
       method: 'POST',
-      body: JSON.stringify({ startDate, endDate }),
+      body: JSON.stringify({ startDate, endDate, ...mock }),
     });
   } catch (error: unknown) {
     console.error('Error initiating manual Fitbit sync:', error);
@@ -249,12 +263,13 @@ export const handleDisconnectOura = async () => {
 
 export const handleManualSyncOura = async (
   startDate?: string,
-  endDate?: string
+  endDate?: string,
+  mock?: SyncMockOptions
 ) => {
   try {
     await apiCall(`/integrations/oura/sync`, {
       method: 'POST',
-      body: JSON.stringify({ startDate, endDate }),
+      body: JSON.stringify({ startDate, endDate, ...mock }),
     });
   } catch (error: unknown) {
     console.error('Error initiating manual Oura sync:', error);
@@ -301,15 +316,95 @@ export const handleDisconnectPolar = async (providerId: string) => {
 export const handleManualSyncPolar = async (
   providerId: string,
   startDate?: string,
-  endDate?: string
+  endDate?: string,
+  mock?: SyncMockOptions
 ) => {
   try {
     await apiCall(`/integrations/polar/sync`, {
       method: 'POST',
-      body: JSON.stringify({ providerId, startDate, endDate }),
+      body: JSON.stringify({ providerId, startDate, endDate, ...mock }),
     });
   } catch (error: unknown) {
     console.error('Error initiating manual Polar sync:', error);
+    throw error;
+  }
+};
+
+export const handleConnectCoros = async (providerId?: string) => {
+  try {
+    const response = await apiCall<{ authUrl: string }>(
+      `/integrations/coros/authorize`,
+      {
+        method: 'GET',
+        params: providerId ? { providerId } : undefined,
+      }
+    );
+    if (response && response.authUrl) {
+      window.location.href = response.authUrl;
+    } else {
+      throw new Error('Failed to get COROS authorization URL.');
+    }
+  } catch (error: unknown) {
+    console.error('Error connecting to COROS:', error);
+    throw error;
+  }
+};
+
+export const handleDisconnectCoros = async (providerId?: string) => {
+  if (
+    !confirm(
+      'Are you sure you want to disconnect from COROS? This will revoke access and delete all associated tokens.'
+    )
+  )
+    return;
+
+  try {
+    await apiCall(`/integrations/coros/disconnect`, {
+      method: 'POST',
+      body: JSON.stringify({ providerId }),
+    });
+  } catch (error: unknown) {
+    console.error('Error disconnecting from COROS:', error);
+    throw error;
+  }
+};
+
+export const handleManualSyncCoros = async (options: {
+  providerId?: string;
+  startDate?: string;
+  endDate?: string;
+  mock?: SyncMockOptions;
+}): Promise<CorosSyncResult> => {
+  try {
+    return await apiCall<CorosSyncResult>(`/integrations/coros/sync`, {
+      method: 'POST',
+      body: JSON.stringify({
+        providerId: options.providerId,
+        startDate: options.startDate,
+        endDate: options.endDate,
+        ...options.mock,
+      }),
+    });
+  } catch (error: unknown) {
+    console.error('Error initiating manual COROS sync:', error);
+    throw error;
+  }
+};
+
+export const fetchCorosStatus = async (providerId?: string) => {
+  try {
+    return await apiCall<{
+      connected: boolean;
+      isActive: boolean;
+      lastSyncAt: string | null;
+      tokenExpiresAt: string | null;
+      externalUserId: string | null;
+    }>(`/integrations/coros/status`, {
+      method: 'GET',
+      params: providerId ? { providerId } : undefined,
+    });
+  } catch (error: unknown) {
+    console.error('Error fetching COROS status:', error);
     throw error;
   }
 };
@@ -350,12 +445,13 @@ export const handleDisconnectStrava = async () => {
 
 export const handleManualSyncStrava = async (
   startDate?: string,
-  endDate?: string
+  endDate?: string,
+  mock?: SyncMockOptions
 ) => {
   try {
     await apiCall(`/integrations/strava/sync`, {
       method: 'POST',
-      body: JSON.stringify({ startDate, endDate }),
+      body: JSON.stringify({ startDate, endDate, ...mock }),
     });
   } catch (error: unknown) {
     console.error('Error initiating manual Strava sync:', error);
@@ -399,12 +495,13 @@ export const handleDisconnectGoogleHealth = async () => {
 
 export const handleManualSyncGoogleHealth = async (
   startDate?: string,
-  endDate?: string
+  endDate?: string,
+  mock?: SyncMockOptions
 ) => {
   try {
     await apiCall(`/integrations/googlehealth/sync`, {
       method: 'POST',
-      body: JSON.stringify({ startDate, endDate }),
+      body: JSON.stringify({ startDate, endDate, ...mock }),
     });
   } catch (error: unknown) {
     console.error('Error initiating manual Google Health sync:', error);
@@ -467,6 +564,40 @@ export interface HevyStatusResponse {
 
 const fetchHevyStatus = async (): Promise<HevyStatusResponse> => {
   return apiCall('/integrations/hevy/status');
+};
+
+export interface LiftosaurStatusResponse {
+  connected: boolean;
+  lastSyncAt: string | null;
+}
+
+export const fetchLiftosaurStatus = async (
+  providerId?: string
+): Promise<LiftosaurStatusResponse> => {
+  return apiCall(
+    providerId
+      ? `/integrations/liftosaur/status?providerId=${encodeURIComponent(providerId)}`
+      : '/integrations/liftosaur/status'
+  );
+};
+
+export const handleDisconnectLiftosaur = async (providerId?: string) => {
+  if (
+    !confirm(
+      'Are you sure you want to disconnect from Liftosaur? This will deactivate the integration until you re-enable it.'
+    )
+  )
+    return;
+
+  try {
+    await apiCall(`/integrations/liftosaur/disconnect`, {
+      method: 'POST',
+      body: JSON.stringify({ providerId }),
+    });
+  } catch (error: unknown) {
+    console.error('Error disconnecting from Liftosaur:', error);
+    throw error;
+  }
 };
 
 const fetchStravaStatus = async (): Promise<OAuthStatusResponse> => {
@@ -538,11 +669,27 @@ export const getEnrichedProviders = async (): Promise<
             enriched.hevy_last_sync_at = status.lastSyncAt;
             break;
           }
+          case 'liftosaur': {
+            const status = await fetchLiftosaurStatus(provider.id);
+            enriched.liftosaur_connect_status = status.connected
+              ? 'connected'
+              : 'disconnected';
+            enriched.liftosaur_last_sync_at = status.lastSyncAt;
+            break;
+          }
           case 'strava': {
             if (provider.has_token) {
               const status = await fetchStravaStatus();
               enriched.strava_last_sync_at = status.lastSyncAt;
               enriched.strava_token_expires = status.tokenExpiresAt;
+            }
+            break;
+          }
+          case 'coros_mcp': {
+            if (provider.has_token) {
+              const status = await fetchCorosStatus(provider.id);
+              enriched.coros_last_sync_at = status.lastSyncAt;
+              enriched.coros_token_expires = status.tokenExpiresAt;
             }
             break;
           }
@@ -561,6 +708,9 @@ export const getEnrichedProviders = async (): Promise<
         }
         if (provider.provider_type === 'hevy') {
           enriched.hevy_connect_status = 'disconnected';
+        }
+        if (provider.provider_type === 'liftosaur') {
+          enriched.liftosaur_connect_status = 'disconnected';
         }
       }
 

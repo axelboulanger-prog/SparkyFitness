@@ -1,7 +1,7 @@
 import { useCallback, useReducer, useRef } from 'react';
-import type { PresetSessionResponse } from '@workspace/shared';
+import type { PresetSessionResponse, WorkoutFormat } from '@workspace/shared';
 import { distanceFromKm, weightFromKg } from '../utils/unitConversions';
-import type { WorkoutDraftExercise } from '../types/drafts';
+import type { WorkoutDraftExercise, DraftSetType } from '../types/drafts';
 import type { WorkoutPreset } from '../types/workoutPresets';
 import {
   draftExercisesReducer,
@@ -13,6 +13,8 @@ import {
 export interface PresetDraft {
   name: string;
   description: string;
+  workoutFormat: WorkoutFormat;
+  timeCapSeconds: number | null;
   exercises: WorkoutDraftExercise[];
 }
 
@@ -20,6 +22,8 @@ function createEmptyDraft(): PresetDraft {
   return {
     name: '',
     description: '',
+    workoutFormat: 'standard',
+    timeCapSeconds: null,
     exercises: [],
   };
 }
@@ -33,6 +37,8 @@ type PresetFormAction =
   | DraftExercisesAction
   | { type: 'SET_NAME'; name: string }
   | { type: 'SET_DESCRIPTION'; description: string }
+  | { type: 'SET_WORKOUT_FORMAT'; workoutFormat: WorkoutFormat }
+  | { type: 'SET_TIME_CAP_SECONDS'; timeCapSeconds: number | null }
   | {
       type: 'POPULATE_FROM_PRESET';
       preset: WorkoutPreset;
@@ -59,10 +65,18 @@ export function presetFormReducer(
     case 'SET_DESCRIPTION':
       return { ...state, description: action.description };
 
+    case 'SET_WORKOUT_FORMAT':
+      return { ...state, workoutFormat: action.workoutFormat };
+
+    case 'SET_TIME_CAP_SECONDS':
+      return { ...state, timeCapSeconds: action.timeCapSeconds };
+
     case 'POPULATE_FROM_PRESET':
       return {
         name: action.preset.name,
         description: action.preset.description ?? '',
+        workoutFormat: action.preset.workout_format ?? 'standard',
+        timeCapSeconds: action.preset.time_cap_seconds ?? null,
         exercises: action.preset.exercises.map((exercise, exerciseIdx) => ({
           clientId: action.clientIds[exerciseIdx].exerciseClientId,
           exerciseId: exercise.exercise_id,
@@ -77,6 +91,7 @@ export function presetFormReducer(
           incrementType: exercise.increment_type ?? 'weight',
           incrementValue: exercise.increment_value ?? 5,
           equipmentBrand: exercise.equipment_brand ?? null,
+          rampIncrement: exercise.ramp_increment ?? null,
           sets: exercise.sets.map((set, setIdx) => ({
             clientId: action.clientIds[exerciseIdx].setClientIds[setIdx],
             restTime: set.rest_time,
@@ -99,7 +114,7 @@ export function presetFormReducer(
                     )
                   )
                 : '',
-            setType: (set.set_type as any) ?? undefined,
+            setType: (set.set_type as DraftSetType) ?? undefined,
             duration: set.duration,
             notes: set.notes,
           })),
@@ -114,6 +129,8 @@ export function presetFormReducer(
       return {
         name: action.session.name,
         description: action.session.description ?? '',
+        workoutFormat: 'standard',
+        timeCapSeconds: null,
         exercises: action.session.exercises.map((exercise, exerciseIdx) => ({
           clientId: action.clientIds[exerciseIdx].exerciseClientId,
           exerciseId: exercise.exercise_id,
@@ -125,7 +142,7 @@ export function presetFormReducer(
           sets: exercise.sets.map((set, setIdx) => ({
             clientId: action.clientIds[exerciseIdx].setClientIds[setIdx],
             restTime: set.rest_time,
-            setType: (set.set_type as any) ?? undefined,
+            setType: (set.set_type as DraftSetType) ?? undefined,
             duration: set.duration,
             notes: set.notes,
             weight:
@@ -195,6 +212,14 @@ export function useWorkoutPresetForm() {
     dispatch({ type: 'SET_DESCRIPTION', description });
   }, []);
 
+  const setWorkoutFormat = useCallback((workoutFormat: WorkoutFormat) => {
+    dispatch({ type: 'SET_WORKOUT_FORMAT', workoutFormat });
+  }, []);
+
+  const setTimeCapSeconds = useCallback((timeCapSeconds: number | null) => {
+    dispatch({ type: 'SET_TIME_CAP_SECONDS', timeCapSeconds });
+  }, []);
+
   const populateFromPreset = useCallback(
     (
       preset: WorkoutPreset,
@@ -251,6 +276,8 @@ export function useWorkoutPresetForm() {
     state,
     setName,
     setDescription,
+    setWorkoutFormat,
+    setTimeCapSeconds,
     addExercise,
     removeExercise,
     replaceExercise,

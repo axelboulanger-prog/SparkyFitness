@@ -9,6 +9,7 @@ import {
   ungroupDraftExercise,
 } from '../utils/workoutSession';
 import type { Exercise } from '../types/exercise';
+import { newUuid } from '../utils/ids';
 import type {
   WorkoutDraftExercise,
   WorkoutDraftSet,
@@ -32,6 +33,7 @@ export type ExerciseProgressionPatch = {
   incrementType?: 'weight' | 'reps' | null;
   incrementValue?: number | null;
   equipmentBrand?: string | null;
+  rampIncrement?: number | null;
 };
 
 export type DraftExercisesAction =
@@ -40,6 +42,7 @@ export type DraftExercisesAction =
       exercise: Exercise;
       exerciseClientId: string;
       setClientId: string;
+      serverId: string;
     }
   | { type: 'REMOVE_EXERCISE'; clientId: string }
   | {
@@ -47,6 +50,7 @@ export type DraftExercisesAction =
       clientId: string;
       exercise: Exercise;
       setClientId: string;
+      serverId: string;
       /**
        * Keep the entry's already-entered sets instead of resetting to one
        * empty set. Opt-in (preset form only) — the workout form still wants
@@ -61,6 +65,7 @@ export type DraftExercisesAction =
       clientId: string;
       newExerciseClientId: string;
       setClientIds: string[];
+      newServerId: string;
     }
   | { type: 'CLEAR_EXERCISE_COMPLETIONS'; clientId: string }
   | { type: 'ADD_SET'; exerciseClientId: string; setClientId: string }
@@ -104,6 +109,7 @@ export function draftExercisesReducer(
         ...exercises,
         {
           clientId: action.exerciseClientId,
+          serverId: action.serverId,
           exerciseId: action.exercise.id,
           exerciseName: action.exercise.name,
           exerciseCategory: action.exercise.category,
@@ -114,6 +120,7 @@ export function draftExercisesReducer(
           incrementType: 'weight',
           incrementValue: 5,
           equipmentBrand: null,
+          rampIncrement: null,
           sets: [
             {
               clientId: action.setClientId,
@@ -132,10 +139,10 @@ export function draftExercisesReducer(
       );
 
     // Mirrors the live store's replaceExercise: swap the exercise identity in
-    // place (keeping clientId, position, and superset grouping). Dropping
-    // serverId sends the whole session down the server's delete-and-recreate
-    // path (mixed old/new exercise ids aren't allowed). Sets are only
-    // preserved when the replacement's effective modality matches the
+    // place (keeping clientId, position, and superset grouping). A new
+    // serverId makes this a new occurrence, so watch telemetry from the old
+    // movement is not inherited, while the payload still has an id. Siblings
+    // keep theirs. Sets are only preserved when the replacement's effective modality matches the
     // original's — otherwise a duration set's null reps, or a weight_reps
     // set's stale duration, would carry into a UI that hides those fields
     // but the server would still persist them. When preserveSets isn't
@@ -167,7 +174,7 @@ export function draftExercisesReducer(
               ];
         return {
           ...exercise,
-          serverId: undefined,
+          serverId: action.serverId,
           snapshot: null,
           exerciseId: action.exercise.id,
           exerciseName: action.exercise.name,
@@ -189,7 +196,7 @@ export function draftExercisesReducer(
       const duplicate: WorkoutDraftExercise = {
         ...original,
         clientId: action.newExerciseClientId,
-        serverId: undefined,
+        serverId: action.newServerId,
         snapshot: null,
         supersetGroup: null,
         sets: original.sets.map((set, i) => ({
@@ -440,11 +447,13 @@ export function useDraftExerciseActions(
         exercisesModifiedRef.current = true;
         const exerciseClientId = generateClientId();
         const setClientId = generateClientId();
+        const serverId = newUuid();
         dispatch({
           type: 'ADD_EXERCISE',
           exercise,
           exerciseClientId,
           setClientId,
+          serverId,
         });
         return { exerciseClientId, setClientId };
       },
@@ -455,11 +464,13 @@ export function useDraftExerciseActions(
       replaceExercise: (clientId: string, exercise: Exercise) => {
         exercisesModifiedRef.current = true;
         const setClientId = generateClientId();
+        const serverId = newUuid();
         dispatch({
           type: 'REPLACE_EXERCISE',
           clientId,
           exercise,
           setClientId,
+          serverId,
           preserveSets: preserveSetsOnReplace,
         });
         // Mirrors REPLACE_EXERCISE's own preserve/reset decision: sets are
@@ -486,6 +497,7 @@ export function useDraftExerciseActions(
       duplicateExercise: (clientId: string) => {
         exercisesModifiedRef.current = true;
         const newExerciseClientId = generateClientId();
+        const newServerId = newUuid();
         const target = exercisesRef.current.find(
           (e) => e.clientId === clientId
         );
@@ -495,6 +507,7 @@ export function useDraftExerciseActions(
           clientId,
           newExerciseClientId,
           setClientIds,
+          newServerId,
         });
         return { exerciseClientId: newExerciseClientId };
       },

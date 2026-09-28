@@ -38,6 +38,7 @@ import { CSS } from '@dnd-kit/utilities';
 import ExerciseHistoryDisplay from '@/components/ExerciseHistoryDisplay';
 import { SortableSetItem } from './SortableWorkoutSet';
 import { CardioLog } from './CardioLog';
+import { kgToLbs, lbsToKg } from '@/utils/unitConversions';
 import type {
   WorkoutPreset,
   SetFieldKey,
@@ -108,6 +109,7 @@ interface SortableExerciseItemProps {
     increment_type?: 'weight' | 'reps' | null;
     increment_value?: number | null;
     equipment_brand?: string | null;
+    ramp_increment?: number | null;
     superset_group?: number | null;
     notes?: string | null;
   };
@@ -142,6 +144,17 @@ interface SortableExerciseItemProps {
   simplified?: boolean;
 }
 
+/** A stored kg increment in the lifter's unit, trimmed for an input. */
+function formatKgIncrementForInput(kg: number, weightUnit: string): string {
+  if (weightUnit === 'kg') return String(Math.round(kg * 100) / 100);
+  // numeric(6,2) kg makes 10 lb read back as 10.009 lb; one decimal restores it.
+  return String(Math.round(kgToLbs(kg) * 10) / 10);
+}
+
+function displayWeightToKg(value: number, weightUnit: string): number {
+  return weightUnit === 'kg' ? value : lbsToKg(value);
+}
+
 export const SortableExerciseItem = ({
   ex,
   exerciseIndex,
@@ -174,8 +187,18 @@ export const SortableExerciseItem = ({
   const [incrementType, setIncrementType] = useState<'weight' | 'reps'>(
     ex.increment_type ?? 'weight'
   );
-  const [incrementValue, setIncrementValue] = useState<string>(
-    ex.increment_value != null ? String(ex.increment_value) : '5'
+  // Weight increments are stored kg and edited in the lifter's unit.
+  const [incrementValue, setIncrementValue] = useState<string>(() =>
+    ex.increment_value == null
+      ? ''
+      : ex.increment_type === 'reps' || ex.progression_mode === 'step_load'
+        ? String(ex.increment_value)
+        : formatKgIncrementForInput(ex.increment_value, weightUnit)
+  );
+  const [rampIncrement, setRampIncrement] = useState<string>(() =>
+    ex.ramp_increment
+      ? formatKgIncrementForInput(ex.ramp_increment, weightUnit)
+      : ''
   );
   const [equipmentBrand, setEquipmentBrand] = useState<string>(
     ex.equipment_brand ?? ''
@@ -253,6 +276,11 @@ export const SortableExerciseItem = ({
       onExerciseFieldChange?.(exerciseIndex, 'increment_type', 'reps');
     }
     onExerciseFieldChange?.(exerciseIndex, 'progression_mode', val);
+    commitIncrementValue(
+      incrementValue,
+      val === 'step_load' ? 'reps' : incrementType,
+      val
+    );
   };
 
   const handleRepGoalChange = (text: string) => {
@@ -262,16 +290,40 @@ export const SortableExerciseItem = ({
     onExerciseFieldChange?.(exerciseIndex, 'rep_goal', cleanNum);
   };
 
+  const commitIncrementValue = (
+    text: string,
+    type: 'weight' | 'reps',
+    mode: typeof progressionMode
+  ) => {
+    const num = text ? parseFloat(text) : NaN;
+    const isWeight = type === 'weight' && mode !== 'step_load';
+    onExerciseFieldChange?.(
+      exerciseIndex,
+      'increment_value',
+      isNaN(num) ? null : isWeight ? displayWeightToKg(num, weightUnit) : num
+    );
+  };
+
   const handleIncrementTypeChange = (type: 'weight' | 'reps') => {
     setIncrementType(type);
     onExerciseFieldChange?.(exerciseIndex, 'increment_type', type);
+    // The typed amount now means something else (kg vs reps); re-store it.
+    commitIncrementValue(incrementValue, type, progressionMode);
   };
 
   const handleIncrementValueChange = (text: string) => {
     setIncrementValue(text);
-    const num = text ? parseFloat(text) : 5;
-    const cleanNum = isNaN(num) ? 5 : num;
-    onExerciseFieldChange?.(exerciseIndex, 'increment_value', cleanNum);
+    commitIncrementValue(text, incrementType, progressionMode);
+  };
+
+  const handleRampIncrementChange = (text: string) => {
+    setRampIncrement(text);
+    const num = text ? parseFloat(text) : NaN;
+    onExerciseFieldChange?.(
+      exerciseIndex,
+      'ramp_increment',
+      isNaN(num) || num === 0 ? null : displayWeightToKg(num, weightUnit)
+    );
   };
 
   const handleEquipmentChange = (text: string) => {
@@ -448,8 +500,11 @@ export const SortableExerciseItem = ({
         </div>
       </div>
 
-      {/* Per-Exercise Progression, Superset & Notes Settings Bar */}
-      {!isWorkoutPreset &&
+      {/* Per-Exercise Progression, Superset & Notes Settings Bar. Only where
+          the edits can be saved (the preset form); plan assignments have no
+          columns for any of these. */}
+      {onExerciseFieldChange &&
+        !isWorkoutPreset &&
         !isCardio &&
         modality !== 'duration' &&
         isExpanded && (
@@ -577,6 +632,35 @@ export const SortableExerciseItem = ({
                   onChange={(e) => handleEquipmentChange(e.target.value)}
                 />
               </div>
+
+              {/* Per-set ramp within one workout (not between sessions) */}
+              {modality !== 'reps_only' && (
+                <div>
+                  <Label
+                    htmlFor={`ramp-increment-${sortableId}`}
+                    className="text-[11px] font-semibold text-muted-foreground uppercase mb-1 block"
+                    title={t(
+                      'workoutPresetForm.rampHint',
+                      'Each working set after the first pre-fills this much heavier in the same workout; use a negative number to ramp down. Warm-up and drop sets are skipped.'
+                    )}
+                  >
+                    {t('workoutPresetForm.rampLabel', {
+                      defaultValue: 'Add per set (this workout, {{unit}})',
+                      // Stone users enter pounds, like the rounding.
+                      unit: weightUnit === 'kg' ? 'kg' : 'lbs',
+                    })}
+                  </Label>
+                  <Input
+                    id={`ramp-increment-${sortableId}`}
+                    type="number"
+                    step="any"
+                    className="h-8 text-xs bg-background"
+                    placeholder={t('workoutPresetForm.rampPlaceholder', 'Off')}
+                    value={rampIncrement}
+                    onChange={(e) => handleRampIncrementChange(e.target.value)}
+                  />
+                </div>
+              )}
             </div>
 
             {/* Exercise Notes Row */}

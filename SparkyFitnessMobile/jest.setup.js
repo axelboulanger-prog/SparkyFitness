@@ -206,6 +206,14 @@ jest.mock('expo-audio', () => ({
     remove: jest.fn(),
   })),
   setAudioModeAsync: jest.fn().mockResolvedValue(undefined),
+  setIsAudioActiveAsync: jest.fn().mockResolvedValue(undefined),
+}));
+
+// Mock expo-speech (guided workout narration)
+jest.mock('expo-speech', () => ({
+  speak: jest.fn(),
+  stop: jest.fn().mockResolvedValue(undefined),
+  getAvailableVoicesAsync: jest.fn().mockResolvedValue([]),
 }));
 
 // Mock expo-camera
@@ -238,6 +246,7 @@ jest.mock('expo-secure-store', () => {
   const store = {};
   return {
     AFTER_FIRST_UNLOCK: 'AFTER_FIRST_UNLOCK',
+    AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY: 'AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY',
     setItemAsync: jest.fn(async (key, value) => {
       store[key] = value;
     }),
@@ -537,6 +546,8 @@ jest.mock('@shopify/react-native-skia', () => {
     Rect: () => null,
     RoundedRect: () => null,
     Path: () => null,
+    Line: () => null,
+    DashPathEffect: () => null,
     Group: ({ children }) => children,
     Skia: {
       Path: {
@@ -709,3 +720,90 @@ if (!testI18n.isInitialized) {
     interpolation: { escapeValue: false },
   });
 }
+
+// Jest's expo-crypto stand-in has no AES implementation. Mock the module
+// instead of loading the native AES build, which pulls in ExpoModulesCore
+// and breaks other suites.
+jest.mock('expo-crypto', () => {
+  const { webcrypto } = require('crypto');
+  const { Buffer } = require('node:buffer');
+
+  class WatchTelemetryTestKey {
+    constructor(bytes) {
+      this.bytesValue = bytes;
+    }
+
+    static async generate() {
+      const bytes = new Uint8Array(32);
+      webcrypto.getRandomValues(bytes);
+      return new WatchTelemetryTestKey(bytes);
+    }
+
+    static async import(input, encoding) {
+      const bytes =
+        encoding === 'base64'
+          ? new Uint8Array(Buffer.from(input, 'base64'))
+          : input;
+      return new WatchTelemetryTestKey(bytes);
+    }
+
+    async encoded() {
+      return Buffer.from(this.bytesValue).toString('base64');
+    }
+  }
+
+  class WatchTelemetryTestSealed {
+    constructor(iv, ciphertext) {
+      this.ivBytes = iv;
+      this.ciphertextBytes = ciphertext;
+    }
+
+    static fromCombined(combined) {
+      const bytes = Buffer.from(combined, 'base64');
+      return new WatchTelemetryTestSealed(
+        new Uint8Array(bytes.subarray(0, 12)),
+        new Uint8Array(bytes.subarray(12))
+      );
+    }
+
+    async combined() {
+      return Buffer.concat([
+        Buffer.from(this.ivBytes),
+        Buffer.from(this.ciphertextBytes),
+      ]).toString('base64');
+    }
+  }
+
+  async function importKey(raw, usages) {
+    return webcrypto.subtle.importKey('raw', raw, 'AES-GCM', false, usages);
+  }
+
+  return {
+    __esModule: true,
+    randomUUID: () => webcrypto.randomUUID(),
+    AESEncryptionKey: WatchTelemetryTestKey,
+    AESSealedData: WatchTelemetryTestSealed,
+    aesEncryptAsync: async (plaintext, key) => {
+      const iv = webcrypto.getRandomValues(new Uint8Array(12));
+      const cryptoKey = await importKey(key.bytesValue, ['encrypt']);
+      const ciphertext = new Uint8Array(
+        await webcrypto.subtle.encrypt(
+          { name: 'AES-GCM', iv },
+          cryptoKey,
+          plaintext
+        )
+      );
+      return new WatchTelemetryTestSealed(iv, ciphertext);
+    },
+    aesDecryptAsync: async (sealed, key) => {
+      const cryptoKey = await importKey(key.bytesValue, ['decrypt']);
+      return new Uint8Array(
+        await webcrypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: sealed.ivBytes },
+          cryptoKey,
+          sealed.ciphertextBytes
+        )
+      );
+    },
+  };
+});

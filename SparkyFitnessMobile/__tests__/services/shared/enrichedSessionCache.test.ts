@@ -3,6 +3,8 @@ import {
   MAX_ENRICHED_SESSION_KEYS,
   _resetEnrichedSessionCacheForTests,
   clearEnrichedSessions,
+  enrichedSessionOrder,
+  hasAnyEnrichedSessions,
   hasEnrichedSession,
   hasHeartRateTelemetry,
   markEnrichedSessions,
@@ -292,5 +294,87 @@ describe('enrichedSessionCache', () => {
         true
       );
     });
+  });
+});
+
+// Gates whether the manual sync offers to re-send workout details: with an
+// empty cache nothing is being skipped, so a forced run and a normal one do
+// identical work and the choice would be noise.
+describe('hasAnyEnrichedSessions', () => {
+  beforeEach(async () => {
+    await AsyncStorage.clear();
+    _resetEnrichedSessionCacheForTests();
+  });
+
+  it('is false before anything has been collected', async () => {
+    mockActiveConfig.mockResolvedValue('server-1');
+    expect(await hasAnyEnrichedSessions()).toBe(false);
+  });
+
+  it('is true once a session is recorded', async () => {
+    mockActiveConfig.mockResolvedValue('server-1');
+    await markEnrichedSessions(['rec-1:m']);
+    expect(await hasAnyEnrichedSessions()).toBe(true);
+  });
+
+  it('is false again after the cache is cleared', async () => {
+    mockActiveConfig.mockResolvedValue('server-1');
+    await markEnrichedSessions(['rec-1:m']);
+    await clearEnrichedSessions();
+    expect(await hasAnyEnrichedSessions()).toBe(false);
+  });
+
+  it('is scoped per server, like the rest of the cache', async () => {
+    mockActiveConfig.mockResolvedValue('server-1');
+    await markEnrichedSessions(['rec-1:m']);
+    expect(await hasAnyEnrichedSessions()).toBe(true);
+
+    _resetEnrichedSessionCacheForTests();
+    mockActiveConfig.mockResolvedValue('server-2');
+    expect(await hasAnyEnrichedSessions()).toBe(false);
+  });
+});
+
+// A forced run bypasses the cache, so the budget alone bounds it. Newest-first
+// would re-read the same few every run and never reach the rest of the range;
+// ordering by collection recency is what makes successive runs progress.
+describe('enrichedSessionOrder', () => {
+  beforeEach(async () => {
+    await AsyncStorage.clear();
+    _resetEnrichedSessionCacheForTests();
+  });
+
+  it('is empty before anything has been collected', async () => {
+    mockActiveConfig.mockResolvedValue('server-1');
+    expect((await enrichedSessionOrder()).size).toBe(0);
+  });
+
+  it('ranks least recently collected first', async () => {
+    mockActiveConfig.mockResolvedValue('server-1');
+    await markEnrichedSessions(['a:1', 'b:1', 'c:1']);
+    const order = await enrichedSessionOrder();
+    expect(order.get('a:1')).toBeLessThan(order.get('b:1') as number);
+    expect(order.get('b:1')).toBeLessThan(order.get('c:1') as number);
+  });
+
+  it('moves a re-collected session to the back, so the next run skips past it', async () => {
+    mockActiveConfig.mockResolvedValue('server-1');
+    await markEnrichedSessions(['a:1', 'b:1', 'c:1']);
+    // A forced run re-reads the oldest, "a", and re-commits it.
+    await markEnrichedSessions(['a:1']);
+    const order = await enrichedSessionOrder();
+    // "b" is now the least recently collected, so the next forced run takes it
+    // rather than "a" again.
+    expect(order.get('b:1')).toBe(0);
+    expect(order.get('a:1')).toBe(2);
+  });
+
+  it('leaves a never-collected session outranking every cached one', async () => {
+    mockActiveConfig.mockResolvedValue('server-1');
+    await markEnrichedSessions(['a:1']);
+    const order = await enrichedSessionOrder();
+    // Absent from the map: callers rank it -1, ahead of position 0.
+    expect(order.has('never-seen:1')).toBe(false);
+    expect(order.get('a:1')).toBe(0);
   });
 });

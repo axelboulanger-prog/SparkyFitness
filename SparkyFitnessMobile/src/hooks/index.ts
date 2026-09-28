@@ -5,6 +5,7 @@ export {
   fastingRootQueryKey,
   chatHistoryQueryKey,
   medicationsRootQueryKey,
+  caffeineActiveRootQueryKey,
 } from './queryKeys';
 export { useServerConnection } from './useServerConnection';
 export { useServerConfigs } from './useServerConfigs';
@@ -13,11 +14,13 @@ export { useDailySummary } from './useDailySummary';
 export { useFamilyUsers, useFamilyDailySummary } from './useFamilyDiary';
 export { useMeasurements } from './useMeasurements';
 
-// Only `useWatchCheckInBridge` is re-exported here: App.tsx mounts it through
-// this barrel. `useUpsertCheckIn` and `useWatchConnectivity` are imported by
-// their own paths at every call site, so adding them here created exports
-// nothing consumes — which `knip` fails the build over.
+// Only `useWatchCheckInBridge`/`useWatchWorkoutBridge` are re-exported here:
+// App.tsx mounts them through this barrel. `useUpsertCheckIn` and
+// `useWatchConnectivity` are imported by their own paths at every call site,
+// so adding them here created exports nothing consumes — which `knip` fails
+// the build over.
 export { useWatchCheckInBridge } from './useWatchCheckInBridge';
+export { useWatchWorkoutBridge } from './useWatchWorkoutBridge';
 
 export { usePreferences } from './usePreferences';
 export { useRefetchOnFocus } from './useRefetchOnFocus';

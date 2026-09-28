@@ -166,3 +166,35 @@ describe('TelemetryRunContext budget', () => {
     expect(createTelemetryRunContext().budget).toBe(Number.POSITIVE_INFINITY);
   });
 });
+
+// Re-sending workout details is a run flag, never a cache wipe. The reuse
+// cache is not range-aware, so clearing it would invalidate every session ever
+// collected — not just the window the user picked — and later background runs
+// would grind back through that whole backlog three at a time, which is the
+// starvation the cache was added to end (#2191).
+describe('TelemetryRunContext.force', () => {
+  it('is off unless asked for, so automatic runs stay cheap', () => {
+    expect(createTelemetryRunContext().force).toBe(false);
+    expect(createTelemetryRunContext({ budget: 3 }).force).toBe(false);
+    expect(
+      createTelemetryRunContext({ budget: 3, interactive: false }).force
+    ).toBe(false);
+  });
+
+  it('is set only when the caller opts in', () => {
+    expect(createTelemetryRunContext({ force: true }).force).toBe(true);
+  });
+
+  it('does not widen the budget — a forced run is still capped', () => {
+    const ctx = createTelemetryRunContext({ budget: 2, force: true });
+    expect(ctx.claim()).toBe(true);
+    expect(ctx.claim()).toBe(true);
+    expect(ctx.claim()).toBe(false);
+  });
+
+  it('leaves staging behaviour unchanged, so forced sessions re-cache', () => {
+    const ctx = createTelemetryRunContext({ force: true });
+    ctx.stageCollected('uuid-1:2026-09-14T20:47:50Z');
+    expect(ctx.drainCollected()).toEqual(['uuid-1:2026-09-14T20:47:50Z']);
+  });
+});

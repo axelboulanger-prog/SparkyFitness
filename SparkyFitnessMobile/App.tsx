@@ -1,5 +1,5 @@
 import './global.css'
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { StatusBar, Platform } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import * as SplashScreen from 'expo-splash-screen';
@@ -8,6 +8,7 @@ import {
   DarkTheme,
   DefaultTheme,
   NavigationContainer,
+  StackActions,
   type LinkingOptions,
   type Theme,
 } from '@react-navigation/native';
@@ -19,7 +20,8 @@ import { FoodImageSourceProvider } from './src/components/FoodImageSourceProvide
 import { LightboxProvider } from './src/components/LightboxProvider';
 import { Uniwind, useUniwind, useCSSVariable } from 'uniwind';
 
-import { queryClient, serverConnectionQueryKey, serverConfigsQueryKey, useSyncHealthData, useCycleMode, useServerConnection, useWatchCheckInBridge } from './src/hooks';
+import { queryClient, serverConnectionQueryKey, serverConfigsQueryKey, useSyncHealthData, useCycleMode, useServerConnection, useWatchCheckInBridge, useWatchWorkoutBridge } from './src/hooks';
+import WatchConnectivity from './modules/watch-connectivity';
 import { useAppStartup } from './src/hooks/useAppStartup';
 import { useAppBootstrap } from './src/hooks/useAppBootstrap';
 import { useAppLanguageForegroundSync } from './src/hooks/useAppLanguageForegroundSync';
@@ -44,6 +46,7 @@ import {
   SafeWorkoutPresetDetail,
   SafeFoodSearch,
   SafeFoodEntryAdd,
+  SafeFoodEntryMultiAdd,
   SafeFoodForm,
   SafeEditBarcode,
   SafeExerciseForm,
@@ -87,6 +90,8 @@ import {
   SafeWhatsNew,
   SafeDailyNutritionDetails,
   SafeNutrientTrends,
+  SafeExerciseStatistics,
+  SafeCardioSession,
   SafeFamilyMembers,
   SafeFamilyDiary,
   SafeFamilyMealDetail,
@@ -109,6 +114,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import Toast from 'react-native-toast-message';
 import { FullWindowOverlay } from 'react-native-screens';
 import type { RootStackParamList } from './src/types/navigation';
+import type { WorkoutCelebration } from './src/utils/workoutCelebration';
 import AddSheet, { addSheetRef } from './src/components/AddSheet';
 import { toastConfig } from './src/components/ui/toastConfig';
 import { TabsLayout } from './src/components/TabsLayout';
@@ -150,6 +156,42 @@ const androidModalAnimation =
 function WatchCheckInGate() {
   const { isConnected: isServerConnected } = useServerConnection();
   useWatchCheckInBridge(isServerConnected);
+  return null;
+}
+
+/**
+ * Unlike `WatchCheckInGate`, listeners stay up while the server is offline
+ * so a set or heart-rate batch is not dropped. The /health poll only runs
+ * when WatchConnectivity is available and a telemetry buffer still needs a
+ * flush. Android, and an idle iPhone, do not poll for a feature they are
+ * not using.
+ */
+// A workout the wearer ended on the watch clears the phone's live session
+// from outside any screen. If the phone is sitting on that workout, move it
+// to the same completion screen the phone's own Finish lands on; anywhere
+// else, clearing is enough (the active-workout bar just disappears).
+function handleWatchFinishedWorkout(celebration: WorkoutCelebration | null) {
+  if (!rootNavigationRef.isReady()) return;
+  if (rootNavigationRef.getCurrentRoute()?.name !== 'ActiveWorkout') return;
+  if (celebration != null) {
+    rootNavigationRef.dispatch(StackActions.replace('WorkoutComplete', celebration));
+  } else if (rootNavigationRef.canGoBack()) {
+    rootNavigationRef.goBack();
+  }
+}
+
+function WatchWorkoutGate() {
+  const watchSupported = WatchConnectivity?.isSupported() === true;
+  const [telemetryPending, setTelemetryPending] = useState(false);
+  const { isConnected: isServerConnected } = useServerConnection({
+    enablePolling: watchSupported && telemetryPending,
+  });
+  useWatchWorkoutBridge(
+    watchSupported,
+    isServerConnected,
+    setTelemetryPending,
+    handleWatchFinishedWorkout
+  );
   return null;
 }
 
@@ -319,6 +361,7 @@ function AppContent() {
       }}
     >
       <WatchCheckInGate />
+      <WatchWorkoutGate />
       <SafeAreaProvider>
         {/* Inside SafeAreaProvider on purpose: the viewer positions its close
             button against the insets, so mounting it at the app root crashes
@@ -488,6 +531,13 @@ function AppContent() {
             })}
           />
           <Stack.Screen
+            name="FoodEntryMultiAdd"
+            component={SafeFoodEntryMultiAdd}
+            options={createStackScreenOptions(t('foodEntryMultiAdd.title', { defaultValue: 'Review' }), {
+              headerBackButtonDisplayMode: 'minimal',
+            })}
+          />
+          <Stack.Screen
             name="FoodForm"
             component={SafeFoodForm}
             options={({ route }) => createStackScreenOptions(
@@ -599,6 +649,16 @@ function AppContent() {
             name="NutrientTrends"
             component={SafeNutrientTrends}
             options={createStackScreenOptions(t('screens.trends', { defaultValue: 'Trends' }), { headerBackTitle: t('navigation.details', { defaultValue: 'Details' }) })}
+          />
+          <Stack.Screen
+            name="ExerciseStatistics"
+            component={SafeExerciseStatistics}
+            options={createStackScreenOptions(t('screens.exerciseStatistics', { defaultValue: 'Exercise Statistics' }), { headerBackButtonDisplayMode: 'minimal' })}
+          />
+          <Stack.Screen
+            name="CardioSession"
+            component={SafeCardioSession}
+            options={createStackScreenOptions(t('screens.cardioSession', { defaultValue: 'Cardio Session' }), { headerBackButtonDisplayMode: 'minimal' })}
           />
           <Stack.Screen
             name="ExerciseSearch"

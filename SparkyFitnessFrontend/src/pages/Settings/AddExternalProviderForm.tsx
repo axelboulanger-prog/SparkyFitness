@@ -17,10 +17,12 @@ import {
   useConnectFitbitMutation,
   useConnectOuraMutation,
   useConnectPolarMutation,
+  useConnectCorosMutation,
   useConnectStravaMutation,
   useConnectWithingsMutation,
   useLoginGarminMutation,
   useSyncHevyMutation,
+  useSyncLiftosaurMutation,
 } from '@/hooks/Integrations/useIntegrations';
 import {
   useCreateExternalProviderMutation,
@@ -55,6 +57,8 @@ const AddExternalProviderForm = ({
   const { data: providerTypes } = useExternalProviderTypesQuery();
   const { mutateAsync: syncHevyData, isPending: isSyncingHevy } =
     useSyncHevyMutation();
+  const { mutateAsync: syncLiftosaurData, isPending: isSyncingLiftosaur } =
+    useSyncLiftosaurMutation();
   const { mutateAsync: loginGarmin, isPending: isLoggingInGarmin } =
     useLoginGarminMutation();
   const { mutateAsync: createExternalProvider, isPending: isCreatingProvider } =
@@ -68,6 +72,8 @@ const AddExternalProviderForm = ({
     useConnectOuraMutation();
   const { mutateAsync: handleConnectPolar, isPending: isConnectingPolar } =
     useConnectPolarMutation();
+  const { mutateAsync: handleConnectCoros, isPending: isConnectingCoros } =
+    useConnectCorosMutation();
   const { mutateAsync: handleConnectStrava, isPending: isConnectingStrava } =
     useConnectStravaMutation();
   const {
@@ -77,12 +83,14 @@ const AddExternalProviderForm = ({
 
   const isAnyIntegrationPending =
     isSyncingHevy ||
+    isSyncingLiftosaur ||
     isLoggingInGarmin ||
     isCreatingProvider ||
     isCreatingGlobal ||
     isConnectingFitbit ||
     isConnectingOura ||
     isConnectingPolar ||
+    isConnectingCoros ||
     isConnectingStrava ||
     isConnectingWithings;
 
@@ -109,6 +117,7 @@ const AddExternalProviderForm = ({
     fitbit: () => handleConnectFitbit(),
     oura: () => handleConnectOura(),
     polar: (id) => handleConnectPolar(id),
+    coros_mcp: (id) => handleConnectCoros(id),
     strava: () => handleConnectStrava(),
   };
   const handleAddProvider = async () => {
@@ -211,6 +220,19 @@ const AddExternalProviderForm = ({
         }
       }
 
+      if (newProvider.provider_type === 'liftosaur' && newProvider.is_active) {
+        try {
+          await syncLiftosaurData({
+            fullSync: fullSyncOnConnect,
+            providerId: createdProvider.id,
+          });
+        } catch (error: unknown) {
+          if (error instanceof Error) {
+            console.error(error);
+          }
+        }
+      }
+
       toast({
         title: 'Success',
         description: 'External data provider added successfully',
@@ -294,7 +316,10 @@ const AddExternalProviderForm = ({
                       value as ExternalDataProvider['provider_type'],
                     app_id: '',
                     app_key: '',
-                    base_url: '',
+                    base_url:
+                      value === 'coros_mcp'
+                        ? 'https://mcpus.coros.com/mcp'
+                        : '',
                     garmin_connect_status: 'disconnected',
                     garmin_last_status_check: '',
                     garmin_token_expires: '',

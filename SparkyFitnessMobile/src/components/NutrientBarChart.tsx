@@ -12,7 +12,7 @@ import {
   formatChartYLabel,
 } from './charts/chartFormatting';
 import { formatLocalizedNumber } from '../localization';
-import type { TrendRange } from '../hooks/useNutritionTrends';
+import type { TrendRange } from '../utils/trendRange';
 import ChartTouchOverlay, {
   ChartLayoutReporter,
   EMPTY_CHART_TOUCH_LAYOUT,

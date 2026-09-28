@@ -68,6 +68,8 @@ export const userPreferencesSchema = z.object({
     .min(MIN_CALORIE_SAFETY_FLOOR)
     .max(MAX_CALORIE_SAFETY_FLOOR),
   chart_scale_mode: z.enum(CHART_SCALE_MODES),
+  // Manually added (#1560; ts-to-zod precedent: UserWaterContainers.zod.ts).
+  adaptive_workout_suggestions: z.boolean(),
   measurement_decimal_places: z.number().int().min(0),
   // Manually added (file is ts-to-zod generated; precedent: MealFoods.zod.ts). Keep on regen.
   use_external_bmr: z.boolean(),
@@ -148,6 +150,7 @@ export const userPreferencesInitializerSchema = z.object({
     .max(MAX_CALORIE_SAFETY_FLOOR)
     .optional(),
   chart_scale_mode: z.enum(CHART_SCALE_MODES).optional(),
+  adaptive_workout_suggestions: z.boolean().optional(),
   measurement_decimal_places: z.number().int().min(0).optional(),
   use_external_bmr: z.boolean().optional(),
   active_ai_service_id: z.string().uuid().nullable().optional(),
@@ -227,6 +230,7 @@ export const userPreferencesMutatorSchema = z.object({
     .max(MAX_CALORIE_SAFETY_FLOOR)
     .optional(),
   chart_scale_mode: z.enum(CHART_SCALE_MODES).optional(),
+  adaptive_workout_suggestions: z.boolean().optional(),
   measurement_decimal_places: z.number().int().min(0).optional(),
   use_external_bmr: z.boolean().optional(),
   active_ai_service_id: z.string().uuid().nullable().optional(),

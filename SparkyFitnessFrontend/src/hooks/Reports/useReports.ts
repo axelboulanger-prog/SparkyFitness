@@ -6,6 +6,7 @@ import {
   getExerciseDashboardData,
   getAlcoholWeekReport,
   getHydrationNutritionRange,
+  getWorkoutDays,
   loadReportsData,
 } from '@/api/Reports/reportsService';
 import { parseStressMeasurement } from '@/utils/reportUtil';
@@ -160,6 +161,30 @@ export const useAlcoholWeekReport = (
 // data (design-decisions correction 3), so Trends needs its own range query
 // for the bespoke hydration chart. Caffeine/alcohol already ride the existing
 // nutritionData prop via NutritionChartsGrid.
+/**
+ * Per-day workout counts for the heatmap. Fetched on its own fixed window so
+ * the heatmap shows the last 12 months regardless of the report's date filter,
+ * without loading 12 months of the heavy exercise dashboard (#2461).
+ */
+export const useWorkoutDays = (
+  startDate: string,
+  endDate: string,
+  userId?: string | null
+) => {
+  const { t } = useTranslation();
+  return useQuery({
+    queryKey: reportKeys.workoutDays(startDate, endDate, userId ?? undefined),
+    queryFn: () => getWorkoutDays(startDate, endDate, userId ?? undefined),
+    enabled: Boolean(startDate) && Boolean(endDate),
+    meta: {
+      errorMessage: t(
+        'reports.failedToLoadWorkoutHeatmap',
+        'Failed to load workout heatmap data.'
+      ),
+    },
+  });
+};
+
 export const useHydrationNutritionRange = (
   startDate: string,
   endDate: string,

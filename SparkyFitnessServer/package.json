@@ -1,6 +1,6 @@
 {
   "name": "sparkyfitnessserver",
-  "version": "1.7.1",
+  "version": "1.7.3",
   "main": "SparkyFitnessServer.js",
   "type": "module",
   "scripts": {
@@ -16,7 +16,7 @@
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "format:check": "prettier . --check",
-    "format": "prettier . --write"
+    "format": "prettier . --write --log-level warn"
   },
   "keywords": [],
   "author": "",

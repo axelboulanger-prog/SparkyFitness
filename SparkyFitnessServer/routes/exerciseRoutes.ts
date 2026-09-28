@@ -836,6 +836,19 @@ router.get('/names', authenticate, async (req, res, next) => {
  *       500:
  *         description: Server error.
  */
+/**
+ * Image values a client may carry over when creating an exercise (e.g. when
+ * duplicating one): an http(s) URL, or a library-relative "Folder/file.ext"
+ * path under uploads/exercises. Rejects traversal and absolute paths.
+ */
+function isSafeExerciseImageReference(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 500)
+    return false;
+  if (/^https?:\/\//i.test(value)) return true;
+  if (value.startsWith('/') || value.includes('\\')) return false;
+  return value.split('/').every((part) => part !== '' && part !== '..');
+}
+
 router.post('/add-external', authenticate, async (req, res, next) => {
   const { wgerExerciseId, language } = req.body;
   if (!wgerExerciseId) {
@@ -1033,11 +1046,18 @@ router.post(
           )
         : [];
 
+      // A duplicated exercise carries the original's image references; keep
+      // them alongside any new uploads, as PUT does. Only library-relative
+      // paths or http(s) URLs are accepted, never traversal or absolute paths.
+      const carriedImages = (exerciseData.images ?? []).filter(
+        isSafeExerciseImageReference
+      );
+
       const newExercise = await exerciseService.createExercise(req.userId, {
         ...exerciseData,
 
         user_id: req.userId,
-        images: imagePaths,
+        images: [...carriedImages, ...imagePaths],
       });
       res.status(201).json(newExercise);
     } catch (error) {

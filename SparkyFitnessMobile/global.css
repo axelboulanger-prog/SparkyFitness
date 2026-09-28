@@ -82,6 +82,13 @@
          moderate RPE and a superset rail on the same live-workout screen. */
       --color-pr: hsl(36, 92%, 44%);
 
+      /* Heart rate and active energy on a logged workout. Separate from
+         --color-calories, which is the dietary-calorie ring on the dashboard:
+         these two mark what a watch measured during the session, not what was
+         eaten, and the summary card shows them side by side. */
+      --color-heart-rate: hsl(358, 75%, 55%);
+      --color-active-energy: hsl(24, 90%, 52%);
+
       --color-wellness-menstrual: hsl(354, 75%, 55%);
       --color-wellness-follicular: hsl(158, 55%, 45%);
       --color-wellness-ovulation: hsl(214, 90%, 56%);
@@ -156,6 +163,9 @@
 
       --color-pr: hsl(42, 88%, 64%);
 
+      --color-heart-rate: hsl(358, 75%, 65%);
+      --color-active-energy: hsl(24, 75%, 62%);
+
       --color-wellness-menstrual: hsl(354, 75%, 65%);
       --color-wellness-follicular: hsl(158, 55%, 55%);
       --color-wellness-ovulation: hsl(214, 90%, 66%);
@@ -228,6 +238,9 @@
       --color-icon-danger: hsl(358, 80%, 65%);
 
       --color-pr: hsl(42, 88%, 64%);
+
+      --color-heart-rate: hsl(358, 75%, 65%);
+      --color-active-energy: hsl(24, 75%, 62%);
 
       --color-wellness-menstrual: hsl(354, 75%, 65%);
       --color-wellness-follicular: hsl(158, 55%, 55%);

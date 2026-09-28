@@ -9,6 +9,7 @@ const { repository, client } = vi.hoisted(() => ({
     getOidcProviderById: vi.fn(),
     updateOidcProvider: vi.fn(),
     createOidcProvider: vi.fn(),
+    upsertEnvOidcProvider: vi.fn(),
     deleteOidcProvider: vi.fn(),
   },
   client: { query: vi.fn(), release: vi.fn() },
@@ -45,6 +46,7 @@ describe('oidcEnvConfig', () => {
   describe('upsertEnvOidcProvider', () => {
     beforeEach(() => {
       vi.resetAllMocks();
+      repository.upsertEnvOidcProvider.mockResolvedValue([]);
       process.env.SPARKY_FITNESS_OIDC_AUTH_ENABLED = 'true';
       process.env.SPARKY_FITNESS_OIDC_ISSUER_URL =
         'https://identity.example.com';
@@ -73,19 +75,19 @@ describe('oidcEnvConfig', () => {
         expect(repository.deleteOidcProvider).not.toHaveBeenCalled();
         expect(repository.updateOidcProvider).not.toHaveBeenCalled();
         expect(repository.createOidcProvider).not.toHaveBeenCalled();
+        expect(repository.upsertEnvOidcProvider).not.toHaveBeenCalled();
       }
     );
 
-    it('updates an exact match and removes obsolete environment providers', async () => {
+    it('reconciles an exact match through the environment upsert', async () => {
       repository.getOidcProviderById.mockResolvedValue({
         provider_id: 'authentik',
       });
 
       await upsertEnvOidcProvider();
 
-      expect(repository.deleteOidcProvider).toHaveBeenCalledWith('obsolete');
-      expect(repository.updateOidcProvider).toHaveBeenCalledWith(
-        'authentik',
+      expect(repository.deleteOidcProvider).not.toHaveBeenCalled();
+      expect(repository.upsertEnvOidcProvider).toHaveBeenCalledWith(
         expect.objectContaining({ provider_id: 'authentik' })
       );
       expect(repository.createOidcProvider).not.toHaveBeenCalled();
@@ -96,7 +98,7 @@ describe('oidcEnvConfig', () => {
 
       await upsertEnvOidcProvider();
 
-      expect(repository.createOidcProvider).toHaveBeenCalledWith(
+      expect(repository.upsertEnvOidcProvider).toHaveBeenCalledWith(
         expect.objectContaining({ provider_id: 'authentik' })
       );
       expect(repository.updateOidcProvider).not.toHaveBeenCalled();

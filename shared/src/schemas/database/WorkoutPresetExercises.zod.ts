@@ -25,6 +25,9 @@ export const workoutPresetExercisesSchema = z.object({
   increment_type: z.enum(["weight", "reps"]).nullable().optional(),
   increment_value: z.number().nullable().optional(),
   equipment_brand: z.string().nullable().optional(),
+  // Manually added (file is ts-to-zod generated; precedent:
+  // UserWaterContainers.zod.ts). Keep on regen. Within-session ramp, kg.
+  ramp_increment: z.number().nullable().optional(),
 });
 
 export const workoutPresetExercisesInitializerSchema = z.object({
@@ -42,6 +45,9 @@ export const workoutPresetExercisesInitializerSchema = z.object({
   increment_type: z.enum(["weight", "reps"]).optional().nullable(),
   increment_value: z.number().optional().nullable(),
   equipment_brand: z.string().optional().nullable(),
+  // Manually added (file is ts-to-zod generated; precedent:
+  // UserWaterContainers.zod.ts). Keep on regen. Within-session ramp, kg.
+  ramp_increment: z.number().optional().nullable(),
 });
 
 export const workoutPresetExercisesMutatorSchema = z.object({
@@ -59,6 +65,9 @@ export const workoutPresetExercisesMutatorSchema = z.object({
   increment_type: z.enum(["weight", "reps"]).optional().nullable(),
   increment_value: z.number().optional().nullable(),
   equipment_brand: z.string().optional().nullable(),
+  // Manually added (file is ts-to-zod generated; precedent:
+  // UserWaterContainers.zod.ts). Keep on regen. Within-session ramp, kg.
+  ramp_increment: z.number().optional().nullable(),
 });
 
 export type WorkoutPresetExercises = z.infer<

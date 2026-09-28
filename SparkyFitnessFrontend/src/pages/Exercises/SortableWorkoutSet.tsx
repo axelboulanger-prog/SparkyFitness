@@ -16,6 +16,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { excerciseWorkoutSetTypes } from '@/constants/excerciseWorkoutSetTypes';
+import { RIR_MAX, RIR_MIN } from '@workspace/shared';
 import { SetFieldKey, SortableSetData } from '@/types/workout';
 import {
   SET_TABLE_LAYOUT,
@@ -38,6 +39,8 @@ interface SortableSetItemProps {
   onRemoveSet: (exerciseIndex: number, setIndex: number) => void;
   weightUnit: string;
   modality: SetTableModality;
+  /** Diary entries record RIR; presets don't, so they leave this off. */
+  showRir?: boolean;
 }
 
 export const SortableSetItem = React.memo(
@@ -51,6 +54,7 @@ export const SortableSetItem = React.memo(
     onRemoveSet,
     weightUnit,
     modality,
+    showRir = false,
   }: SortableSetItemProps) => {
     const { t } = useTranslation();
     const [showNotes, setShowNotes] = useState(!!set.notes);
@@ -67,7 +71,9 @@ export const SortableSetItem = React.memo(
     const hasNotes = !!set.notes;
     const typeBadgeClass =
       SET_TYPE_STYLES[set.set_type ?? ''] ?? 'bg-muted text-muted-foreground';
-    const { gridClass, showReps, showWeight } = SET_TABLE_LAYOUT[modality];
+    const layout = SET_TABLE_LAYOUT[modality];
+    const { showReps, showWeight } = layout;
+    const gridClass = showRir ? layout.gridClassWithRir : layout.gridClass;
     // Isometric sets predating the duration column stored their hold in `reps`.
     const durationValue =
       set.duration ?? (modality === 'duration' ? (set.reps ?? null) : null);
@@ -175,6 +181,32 @@ export const SortableSetItem = React.memo(
                 )
               }
             />
+
+            {showRir && (
+              <Input
+                className="h-8 text-sm"
+                type="number"
+                min={RIR_MIN}
+                max={RIR_MAX}
+                step="0.5"
+                placeholder="—"
+                aria-label={t('workout.rir', 'RIR')}
+                value={set.rir ?? ''}
+                onChange={(e) =>
+                  onSetChange(
+                    exerciseIndex,
+                    setIndex,
+                    'rir',
+                    e.target.value === ''
+                      ? null
+                      : Math.min(
+                          RIR_MAX,
+                          Math.max(RIR_MIN, Number(e.target.value))
+                        )
+                  )
+                }
+              />
+            )}
 
             {/* Duration */}
             <NumericInput

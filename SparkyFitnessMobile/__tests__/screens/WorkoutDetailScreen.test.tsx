@@ -271,6 +271,63 @@ describe('WorkoutDetailScreen', () => {
     expect(screen.queryByLabelText('More options for Bench Press')).toBeNull();
   });
 
+  it('summarises heart rate across the session when a watch reported it', () => {
+    const session = buildSession({
+      exercises: [
+        buildExercise({
+          id: 'entry-1',
+          duration_minutes: 1,
+          avg_heart_rate: 100,
+          max_heart_rate: 110,
+        }),
+        buildExercise({
+          id: 'entry-2',
+          duration_minutes: 60,
+          avg_heart_rate: 160,
+          max_heart_rate: 172,
+        }),
+      ],
+    });
+    const screen = renderScreen(session);
+
+    // Duration-weighted: 1 min at 100 and 60 min at 160 → ~159, not 130.
+    expect(screen.getByText('Avg HR')).toBeTruthy();
+    expect(screen.getByText('159')).toBeTruthy();
+    // Highest of the per-exercise maxima — exact, not an approximation.
+    expect(screen.getByText('Max HR')).toBeTruthy();
+    expect(screen.getByText('172')).toBeTruthy();
+  });
+
+  it('omits the heart-rate summary entirely when no exercise has one', () => {
+    const screen = renderScreen(buildSession());
+    expect(screen.queryByText('Avg HR')).toBeNull();
+    expect(screen.queryByText('Max HR')).toBeNull();
+  });
+
+  it('falls back to an unweighted avg HR when any duration is zero', () => {
+    const session = buildSession({
+      exercises: [
+        buildExercise({
+          id: 'entry-1',
+          duration_minutes: 0,
+          avg_heart_rate: 100,
+          max_heart_rate: 110,
+        }),
+        buildExercise({
+          id: 'entry-2',
+          duration_minutes: 60,
+          avg_heart_rate: 160,
+          max_heart_rate: 172,
+        }),
+      ],
+    });
+    const screen = renderScreen(session);
+
+    // Weighted would ignore the zero-duration 100 bpm and report 160.
+    expect(screen.getByText('Avg HR')).toBeTruthy();
+    expect(screen.getByText('130')).toBeTruthy();
+  });
+
   it('derives done vs upcoming set states from server completed_at timestamps', () => {
     const session = buildSession({
       exercises: [

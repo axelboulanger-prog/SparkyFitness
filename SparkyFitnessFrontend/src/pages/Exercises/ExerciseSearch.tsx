@@ -16,6 +16,7 @@ import BodyMapFilter from './BodyMapFilter';
 import { Exercise } from '@/types/exercises';
 import { ExerciseSearchListItem } from './ExerciseSearchListItem';
 import { useExerciseSearchHook } from '@/hooks/Exercises/useExerciseSearchHook';
+import { localizeEquipment } from '@/utils/exerciseTaxonomy';
 
 interface OwnershipFields {
   user_id?: string | null;
@@ -275,7 +276,7 @@ const ExerciseSearch = ({
                     : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-blue-400 hover:text-blue-600'
                 }`}
             >
-              {eq}
+              {localizeEquipment(t, eq)}
             </button>
           ))}
         </div>

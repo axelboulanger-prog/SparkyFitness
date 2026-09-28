@@ -9,8 +9,10 @@ import { useTranslation } from 'react-i18next';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { useCSSVariable } from 'uniwind';
+import { RIR_MAX, RIR_MIN } from '@workspace/shared';
 import { measureAnchoredMenuTrigger, type AnchorRect } from './AnchoredMenu';
 import CompletionCheck, { LogCircle } from './CompletionCheck';
+import Icon from './Icon';
 import {
   SetCellInput,
   SetSwipeDeleteAction,
@@ -31,6 +33,7 @@ import {
   epley1RmKg,
   estimateRepMaxKg,
   formatRecentSessionSet,
+  firstSetInputField,
   getRpeTone,
   isDurationModality,
   quantizeSetWeightKg,
@@ -40,7 +43,10 @@ import {
   type RpeTone,
   type WorkoutCardSet,
 } from '../utils/workoutSession';
-import type { ActiveSetPatch } from '../stores/activeWorkoutStore';
+import {
+  useActiveWorkoutStore,
+  type ActiveSetPatch,
+} from '../stores/activeWorkoutStore';
 import type { ActiveWorkoutMetricColumn } from '../stores/appPreferencesStore';
 import type {
   ExerciseModality,
@@ -84,6 +90,14 @@ export function parseRpeInput(text: string): number | null {
   if (Number.isNaN(value)) return null;
   const snapped = Math.round(value * 2) / 2;
   return Math.min(10, Math.max(1, snapped));
+}
+
+/** Clamp a typed RIR to 0–10 in 0.5 steps; empty/invalid → null. */
+export function parseRirInput(text: string): number | null {
+  const value = parseDecimalInput(text);
+  if (Number.isNaN(value)) return null;
+  const snapped = Math.round(value * 2) / 2;
+  return Math.min(RIR_MAX, Math.max(RIR_MIN, snapped));
 }
 
 export type SetRowMode = 'live' | 'view' | 'edit';
@@ -261,6 +275,11 @@ function ActiveWorkoutSetRow({
       RPE_TONE_VARS.max,
     ]) as [string, string, string, string, string, string];
 
+  const [stopwatchRunningColor, surfaceColor] = useCSSVariable([
+    '--color-icon-danger',
+    '--color-surface',
+  ]) as [string, string];
+
   const rpeToneColors: Record<RpeTone, string> = useMemo(
     () => ({
       easy: rpeEasy,
@@ -292,8 +311,21 @@ function ActiveWorkoutSetRow({
     set.reps != null ? String(set.reps) : ''
   );
   const [durationDraft, setDurationDraft] = useState(durationSeedText);
+  // The per-set effort input edits whichever effort metric the column shows:
+  // RIR when the RIR column is picked, otherwise RPE. The draft, ref, focus
+  // field ('rpe') and accessory-bar wiring are shared between the two.
+  const isEffortColumn = metricColumn === 'rpe' || metricColumn === 'rir';
+  const effortField: 'rpe' | 'rir' = metricColumn === 'rir' ? 'rir' : 'rpe';
+  const effortValue = (effortField === 'rir' ? set.rir : set.rpe) ?? null;
+  const parseEffortInput =
+    effortField === 'rir' ? parseRirInput : parseRpeInput;
+  const effortPatch = useCallback(
+    (value: number | null): ActiveSetPatch =>
+      effortField === 'rir' ? { rir: value } : { rpe: value },
+    [effortField]
+  );
   const [rpeDraft, setRpeDraft] = useState(() =>
-    set.rpe != null ? formatRpe(set.rpe) : ''
+    effortValue != null ? formatRpe(effortValue) : ''
   );
 
   // Re-seed drafts when the underlying set's VALUES change (unit change or an
@@ -301,7 +333,7 @@ function ActiveWorkoutSetRow({
   // this row's instance alive across an autosave that only reassigns the id, so
   // keying the re-seed on the id would wipe in-progress text under a still-open
   // keyboard.
-  const signature = `${set.weight}|${set.reps}|${set.duration}|${set.rpe}|${weightUnit}`;
+  const signature = `${set.weight}|${set.reps}|${set.duration}|${set.rpe}|${set.rir}|${effortField}|${weightUnit}`;
   const [prevSignature, setPrevSignature] = useState(signature);
   if (signature !== prevSignature) {
     setPrevSignature(signature);
@@ -318,8 +350,8 @@ function ActiveWorkoutSetRow({
       // mid-typing: leave the draft alone while its parse already matches the
       // committed value (e.g. "0" clamps to 1 — rewriting would jump the text
       // under the user's cursor). Blur still snaps the text via commitRpe.
-      if (parseRpeInput(rpeDraft) !== (set.rpe ?? null)) {
-        setRpeDraft(set.rpe != null ? formatRpe(set.rpe) : '');
+      if (parseEffortInput(rpeDraft) !== effortValue) {
+        setRpeDraft(effortValue != null ? formatRpe(effortValue) : '');
       }
     }
   }
@@ -404,9 +436,9 @@ function ActiveWorkoutSetRow({
   const handleEditRpeChange = useCallback(
     (text: string) => {
       setRpeDraft(text);
-      onCommitField?.(setId, { rpe: parseRpeInput(text) });
+      onCommitField?.(setId, effortPatch(parseEffortInput(text)));
     },
-    [onCommitField, setId]
+    [onCommitField, setId, effortPatch, parseEffortInput]
   );
 
   // Advance past this row: activate the next set's first value cell, or add a
@@ -414,11 +446,8 @@ function ActiveWorkoutSetRow({
   // so the next row's first cell is this row's. In-row hops (weight → reps →
   // RPE) are native focusField moves the screen's accessory bar makes through
   // the handle.
-  const firstField: Exclude<SetInputField, 'rpe'> = durationLike
-    ? 'duration'
-    : modality === 'reps_only'
-      ? 'reps'
-      : 'weight';
+  const firstField: Exclude<SetInputField, 'rpe'> =
+    firstSetInputField(modality);
   const handleAdvance = useCallback(() => {
     if (nextSetId) {
       onActivateSet?.(nextSetId, firstField);
@@ -479,10 +508,10 @@ function ActiveWorkoutSetRow({
   // no re-commit; the draft already holds its snapped display form.
   const commitRpeValue = useCallback(
     (text: string) => {
-      if (text === (set.rpe != null ? formatRpe(set.rpe) : '')) return;
-      onCommitField?.(setId, { rpe: parseRpeInput(text) });
+      if (text === (effortValue != null ? formatRpe(effortValue) : '')) return;
+      onCommitField?.(setId, effortPatch(parseEffortInput(text)));
     },
-    [onCommitField, setId, set.rpe]
+    [onCommitField, setId, effortValue, effortPatch, parseEffortInput]
   );
 
   // Blur handler: commit, then snap the visible text to the committed form
@@ -490,10 +519,10 @@ function ActiveWorkoutSetRow({
   const commitRpe = useCallback(
     (text: string) => {
       commitRpeValue(text);
-      const value = parseRpeInput(text);
+      const value = parseEffortInput(text);
       setRpeDraft(value != null ? formatRpe(value) : '');
     },
-    [commitRpeValue]
+    [commitRpeValue, parseEffortInput]
   );
 
   // Live only: commit any in-progress drafts when this row stops being the
@@ -511,7 +540,7 @@ function ActiveWorkoutSetRow({
       commitWeight(weightDraft);
       commitReps(repsDraft);
     }
-    if (metricColumn === 'rpe') commitRpeValue(rpeDraft);
+    if (isEffortColumn) commitRpeValue(rpeDraft);
   }, [
     isLive,
     isFocusedRow,
@@ -520,7 +549,7 @@ function ActiveWorkoutSetRow({
     commitReps,
     commitDuration,
     commitRpeValue,
-    metricColumn,
+    isEffortColumn,
     weightDraft,
     repsDraft,
     durationDraft,
@@ -538,7 +567,7 @@ function ActiveWorkoutSetRow({
       commitWeight(weightDraft);
       commitReps(repsDraft);
     }
-    if (metricColumn === 'rpe') commitRpe(rpeDraft);
+    if (isEffortColumn) commitRpe(rpeDraft);
     onComplete?.(setId);
   }, [
     durationLike,
@@ -546,7 +575,7 @@ function ActiveWorkoutSetRow({
     commitReps,
     commitDuration,
     commitRpe,
-    metricColumn,
+    isEffortColumn,
     onComplete,
     setId,
     weightDraft,
@@ -596,6 +625,10 @@ function ActiveWorkoutSetRow({
           text: formatRpe(set.rpe),
           color: rpeToneColors[getRpeTone(set.rpe)],
         };
+      }
+      case 'rir': {
+        if (set.rir == null) return { text: '–' };
+        return { text: formatRpe(set.rir) };
       }
       case 'volume':
         return { text: formatMetricWeight(setVolumeKg(set), weightUnit) };
@@ -772,7 +805,7 @@ function ActiveWorkoutSetRow({
     completedCheck
   ) : null;
 
-  const showRpeInput = metricColumn === 'rpe' && (!isEdit || rpeEditable);
+  const showRpeInput = isEffortColumn && (!isEdit || rpeEditable);
 
   // PREVIOUS column (only when the consumer passes the prop). The value is a
   // tap target while it can still fill something; otherwise inert gray text.
@@ -904,28 +937,66 @@ function ActiveWorkoutSetRow({
       />
     </View>
   );
-  // Duration cell (duration-modality rows): raw integer seconds under the SEC
-  // header. Edit mode is reducer-controlled like weight/reps; the legacy
-  // reps-as-seconds value surfaces as the placeholder there so the row still
-  // reads correctly without silently writing a duration.
+  // Timed/hold-set stopwatch. The start time lives in the persisted store
+  // (keyed by set id), so it survives this row unmounting, a collapsed card
+  // and a cold start; only the ticking display is local.
+  const stopwatchStartedAt = useActiveWorkoutStore(
+    (s) => s.setTimerStartedAt[setId] ?? null
+  );
+  const [stopwatchNowMs, setStopwatchNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (stopwatchStartedAt == null) return;
+    const interval = setInterval(() => setStopwatchNowMs(Date.now()), 500);
+    return () => clearInterval(interval);
+  }, [stopwatchStartedAt]);
+  const stopwatchElapsedSec =
+    stopwatchStartedAt != null
+      ? Math.max(0, Math.floor((stopwatchNowMs - stopwatchStartedAt) / 1000))
+      : 0;
+  const showStopwatch = isLive && !readOnly && state !== 'done';
+
+  const handleToggleStopwatch = useCallback(() => {
+    const store = useActiveWorkoutStore.getState();
+    if (stopwatchStartedAt == null) {
+      setStopwatchNowMs(Date.now());
+      store.startSetTimer(setId);
+      return;
+    }
+    const elapsed = store.stopSetTimer(setId);
+    if (elapsed == null) return;
+    // Pre-fill the measured time and hand the cell back for a correction.
+    setDurationDraft(String(elapsed));
+    onActivateSet?.(setId, 'duration');
+  }, [stopwatchStartedAt, setId, onActivateSet]);
+
   const durationInputCell = (
-    <View className="flex-1 items-center">
+    <View
+      className="flex-1 flex-row items-center justify-center"
+      style={{ gap: 4 }}
+    >
       <SetCellInput
         inputRef={durationInputRef}
         value={
-          isEdit
-            ? set.duration != null
-              ? String(set.duration)
-              : ''
-            : durationDraft
+          stopwatchStartedAt != null
+            ? String(stopwatchElapsedSec)
+            : isEdit
+              ? set.duration != null
+                ? String(set.duration)
+                : ''
+              : durationDraft
         }
         onChangeText={
           isEdit
             ? (text) => onEditFieldChange?.(setId, 'duration', text)
             : setDurationDraft
         }
-        onBlur={isEdit ? undefined : () => commitDuration(durationDraft)}
+        onBlur={
+          isEdit || stopwatchStartedAt != null
+            ? undefined
+            : () => commitDuration(durationDraft)
+        }
         onFocus={() => onActivateSet?.(setId, 'duration')}
+        editable={stopwatchStartedAt == null}
         keyboardType="number-pad"
         accessibilityLabel={t('activeWorkout.setRow.duration', {
           defaultValue: 'Duration',
@@ -940,6 +1011,35 @@ function ActiveWorkoutSetRow({
         }
         flat
       />
+      {showStopwatch && (
+        <Pressable
+          onPress={handleToggleStopwatch}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel={
+            stopwatchStartedAt != null
+              ? t('activeWorkout.setRow.stopTimer', {
+                  defaultValue: 'Stop stopwatch',
+                })
+              : t('activeWorkout.setRow.startTimer', {
+                  defaultValue: 'Start stopwatch',
+                })
+          }
+          className="p-1.5 rounded-full"
+          style={{
+            backgroundColor:
+              stopwatchStartedAt != null
+                ? stopwatchRunningColor
+                : withAlpha(accentPrimary, 0.15),
+          }}
+        >
+          <Icon
+            name={stopwatchStartedAt != null ? 'stop' : 'play'}
+            size={12}
+            color={stopwatchStartedAt != null ? surfaceColor : accentPrimary}
+          />
+        </Pressable>
+      )}
     </View>
   );
   // RPE stays a mounted input on every row like weight/reps; the committed
@@ -954,9 +1054,11 @@ function ActiveWorkoutSetRow({
         onBlur={() => commitRpe(rpeDraft)}
         onFocus={() => onActivateRpe?.(setId)}
         keyboardType="decimal-pad"
-        accessibilityLabel={t('activeWorkout.setRow.rpe', {
-          defaultValue: 'RPE',
-        })}
+        accessibilityLabel={
+          effortField === 'rir'
+            ? t('activeWorkout.setRow.rir', { defaultValue: 'RIR' })
+            : t('activeWorkout.setRow.rpe', { defaultValue: 'RPE' })
+        }
         className="w-11"
         flat
         textColor={metricValue.color}

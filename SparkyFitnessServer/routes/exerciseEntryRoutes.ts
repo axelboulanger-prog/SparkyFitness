@@ -1,5 +1,8 @@
 import express from 'express';
-import { importFitResponseSchema } from '@workspace/shared';
+import {
+  importFitResponseSchema,
+  attachExerciseEntryWatchTelemetryRequestSchema,
+} from '@workspace/shared';
 import { authenticate } from '../middleware/authMiddleware.js';
 import checkPermissionMiddleware from '../middleware/checkPermissionMiddleware.js';
 import exerciseService from '../services/exerciseService.js';
@@ -805,6 +808,92 @@ router.put(
     }
   }
 );
+/**
+ * @swagger
+ * /exercise-entries/{id}/watch-telemetry:
+ *   post:
+ *     summary: Attach watch-measured telemetry to an exercise entry
+ *     tags: [Fitness & Workouts]
+ *     description: >
+ *       Fills in avg/max heart rate, the HR-zone breakdown and measured
+ *       active energy for an exercise entry that already exists (e.g. one
+ *       created by a live workout started from a preset), from what a paired
+ *       watch recorded. Active energy replaces the server's duration-based
+ *       calorie estimate for that entry.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The exercise entry ID.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               hrSamples:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     t:
+ *                       type: string
+ *                       format: date-time
+ *                     bpm:
+ *                       type: number
+ *               activeEnergyKcal:
+ *                 type: number
+ *                 description: Measured active energy for this entry, in kcal.
+ *     responses:
+ *       204:
+ *         description: Telemetry attached.
+ *       400:
+ *         description: Invalid request body or exercise entry ID.
+ *       404:
+ *         description: Exercise entry not found.
+ *       500:
+ *         description: Failed to attach telemetry.
+ */
+router.post('/:id/watch-telemetry', authenticate, async (req, res, next) => {
+  const { id } = req.params;
+  const uuidRegex =
+    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+  if (!id || typeof id !== 'string' || !uuidRegex.test(id)) {
+    return res.status(400).json({
+      error: 'Exercise Entry ID is required and must be a valid UUID.',
+    });
+  }
+  const parsed = attachExerciseEntryWatchTelemetryRequestSchema.safeParse(
+    req.body
+  );
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.message });
+  }
+  try {
+    await exerciseEntryService.attachWatchTelemetryToExerciseEntry(
+      req.userId,
+      req.originalUserId || req.userId,
+      id,
+      parsed.data.hrSamples,
+      parsed.data.activeEnergyKcal,
+      parsed.data.durationMinutes
+    );
+    res.status(204).send();
+  } catch (error) {
+    // Narrowed rather than suppressed with @ts-expect-error: the service
+    // throws a plain Error with a `status` bolted on, and spelling that out
+    // keeps the check honest if the shape ever changes.
+    const status = (error as { status?: number }).status;
+    const message = error instanceof Error ? error.message : '';
+    if (status === 404 || message.startsWith('Exercise entry not found')) {
+      return res.status(404).json({ error: message });
+    }
+    next(error);
+  }
+});
 /**
  * @swagger
  * /exercise-entries/progress/{exerciseId}:

@@ -602,6 +602,25 @@ async function updateFoodEntry(
     client.release();
   }
 }
+async function updateFoodEntryTime(
+  entryId: string,
+  userId: string,
+  entryTime: string | null,
+  client?: PoolClient
+) {
+  const ownClient = !client;
+  const activeClient = client ?? (await getClient(userId));
+  try {
+    const result = await activeClient.query(
+      'UPDATE food_entries SET entry_time = $1 WHERE id = $2 AND user_id = $3 RETURNING *',
+      [entryTime, entryId, userId]
+    );
+    return result.rows[0] || null;
+  } finally {
+    if (ownClient) activeClient.release();
+  }
+}
+
 async function getFoodEntriesByDate(userId: string, selectedDate: string) {
   const client = await getClient(userId); // User-specific operation
   try {
@@ -1435,6 +1454,7 @@ async function deleteStaleProviderEntries(
 export { createFoodEntry };
 export { getFoodEntryOwnerId };
 export { updateFoodEntry };
+export { updateFoodEntryTime };
 export { deleteFoodEntry };
 export { deleteStaleProviderEntries };
 export { getFoodEntriesByDate };
@@ -1453,6 +1473,7 @@ export default {
   createFoodEntry,
   getFoodEntryOwnerId,
   updateFoodEntry,
+  updateFoodEntryTime,
   deleteFoodEntry,
   deleteStaleProviderEntries,
   getFoodEntriesByDate,

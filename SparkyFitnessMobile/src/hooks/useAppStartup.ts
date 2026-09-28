@@ -72,7 +72,7 @@ export function useAppStartup({ shouldYieldObserverSync }: AppStartupArgs) {
     initWorkoutNotificationActions();
     initMedicationNotificationActions();
 
-    // iOS-only (no-op on Android): keeps the workout Live Activity in sync
+    // Keeps the iOS Live Activity or Android ongoing notification in sync
     // with the active-workout store.
     initWorkoutLiveActivity().catch((error) => {
       const message = error instanceof Error ? error.message : String(error);

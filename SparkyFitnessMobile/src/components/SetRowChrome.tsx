@@ -92,6 +92,8 @@ export interface SetCellInputProps {
   flat?: boolean;
   /** Tint for the input text (e.g. the RPE effort tone). */
   textColor?: string;
+  /** False shows the value read-only (e.g. while a set stopwatch runs). */
+  editable?: boolean;
 }
 
 export function SetCellInput({
@@ -106,6 +108,7 @@ export function SetCellInput({
   placeholder = '–',
   flat = false,
   textColor,
+  editable = true,
 }: SetCellInputProps) {
   const [focused, setFocused] = useState(false);
   const [raisedBg, borderSubtle, accentPrimary] = useCSSVariable([
@@ -136,6 +139,7 @@ export function SetCellInput({
         onBlur?.();
       }}
       keyboardType={keyboardType}
+      editable={editable}
       selectTextOnFocus
       placeholder={placeholder}
       accessibilityLabel={accessibilityLabel}

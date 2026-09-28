@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  distributeProgressionReps,
   evaluateProgression,
   ExerciseProgressionConfig,
   LastExercisePerformance,
@@ -105,5 +106,51 @@ describe('Progression Engine - Unit Tests', () => {
 
     expect(result.goalAchieved).toBe(true);
     expect(result.suggestedWeight).toBe(152.5); // 145 + 7.5
+  });
+});
+
+describe('distributeProgressionReps', () => {
+  const repsIncrease = (suggestedRepGoal: number) => ({
+    goalAchieved: true,
+    status: 'PROGRESSION_REPS_INCREASE' as const,
+    suggestedWeight: 100,
+    suggestedRepGoal,
+    totalRepsAchieved: 0,
+    repDifference: 0,
+    message: '',
+  });
+
+  it('gives every working set the per-set target in fixed mode', () => {
+    expect(distributeProgressionReps(repsIncrease(9), 'fixed', 3)).toEqual([
+      9, 9, 9,
+    ]);
+  });
+
+  it('splits a session total, earlier sets taking the remainder', () => {
+    expect(distributeProgressionReps(repsIncrease(26), 'rep_goal', 3)).toEqual([
+      9, 9, 8,
+    ]);
+    expect(distributeProgressionReps(repsIncrease(24), 'step_load', 3)).toEqual(
+      [8, 8, 8]
+    );
+  });
+
+  it('is null unless reps went up', () => {
+    expect(distributeProgressionReps(null, 'fixed', 3)).toBeNull();
+    expect(
+      distributeProgressionReps(
+        { ...repsIncrease(9), status: 'PROGRESSION_WEIGHT_INCREASE' },
+        'fixed',
+        3
+      )
+    ).toBeNull();
+    expect(
+      distributeProgressionReps(
+        { ...repsIncrease(9), goalAchieved: false },
+        'fixed',
+        3
+      )
+    ).toBeNull();
+    expect(distributeProgressionReps(repsIncrease(9), 'fixed', 0)).toBeNull();
   });
 });

@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import './BodyMapFilter.css';
 import { useBodyMapSvgQuery } from '@/hooks/Exercises/useExercises';
-import { svgClassToSchemaName } from '@/constants/exercises';
+import { svgClassToSchemaName } from '@workspace/shared';
 
 interface BodyMapFilterProps {
   selectedMuscles: string[];

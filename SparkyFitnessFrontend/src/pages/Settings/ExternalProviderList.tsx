@@ -236,7 +236,8 @@ const ExternalProviderList = ({
         editData.provider_type === 'tandoor' ||
         editData.provider_type === 'norish' ||
         editData.provider_type === 'free-exercise-db' ||
-        editData.provider_type === 'openfoodfacts'
+        editData.provider_type === 'openfoodfacts' ||
+        editData.provider_type === 'coros_mcp'
           ? editData.base_url || null
           : null,
       withings_last_sync_at:
@@ -265,6 +266,14 @@ const ExternalProviderList = ({
         editData.provider_type === 'polar'
           ? editData.polar_token_expires
           : null,
+      coros_last_sync_at:
+        editData.provider_type === 'coros_mcp'
+          ? editData.coros_last_sync_at
+          : null,
+      coros_token_expires:
+        editData.provider_type === 'coros_mcp'
+          ? editData.coros_token_expires
+          : null,
       strava_last_sync_at:
         editData.provider_type === 'strava'
           ? editData.strava_last_sync_at
@@ -280,8 +289,10 @@ const ExternalProviderList = ({
         editData.provider_type === 'oura' ||
         editData.provider_type === 'googlehealth' ||
         editData.provider_type === 'hevy' ||
+        editData.provider_type === 'liftosaur' ||
         editData.provider_type === 'strava' ||
-        editData.provider_type === 'polar'
+        editData.provider_type === 'polar' ||
+        editData.provider_type === 'coros_mcp'
           ? editData.sync_frequency
           : undefined,
     };
@@ -398,6 +409,9 @@ const ExternalProviderList = ({
       oura_token_expires: provider.oura_token_expires || '',
       polar_last_sync_at: provider.polar_last_sync_at || '',
       polar_token_expires: provider.polar_token_expires || '',
+      coros_last_sync_at: provider.coros_last_sync_at || '',
+      coros_token_expires: provider.coros_token_expires || '',
+      liftosaur_last_sync_at: provider.liftosaur_last_sync_at || '',
     });
   };
 

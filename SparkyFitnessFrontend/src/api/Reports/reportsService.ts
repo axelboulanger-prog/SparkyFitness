@@ -3,6 +3,7 @@ import { ExerciseDashboardData, ReportResponse } from '@/types/reports';
 import type {
   AlcoholWeekResponse,
   HydrationNutritionRangeResponse,
+  WorkoutDaysResponse,
 } from '@workspace/shared';
 
 export const loadReportsData = async (
@@ -59,6 +60,19 @@ export const getAlcoholWeekReport = async (
     }
   );
   return response;
+};
+
+/** Days with logged workouts (and counts) — the workout heatmap source. */
+export const getWorkoutDays = async (
+  startDate: string,
+  endDate: string,
+  userId?: string
+): Promise<WorkoutDaysResponse> => {
+  const params = new URLSearchParams({ start: startDate, end: endDate });
+  if (userId) params.append('userId', userId);
+  return apiCall(`/v2/reports/workout-days?${params.toString()}`, {
+    method: 'GET',
+  });
 };
 
 export const getHydrationNutritionRange = async (

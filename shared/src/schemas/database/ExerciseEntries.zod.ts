@@ -10,6 +10,7 @@ export const exerciseEntriesSchema = z.object({
   calories_burned: z.number(),
   entry_date: z.date().nullable(),
   entry_time: z.string().nullable(),
+  record_timezone: z.string().nullable().optional(),
   notes: z.string().nullable(),
   created_at: z.date().nullable(),
   updated_at: z.date(),
@@ -80,6 +81,8 @@ export const exerciseEntriesSchema = z.object({
   gear_external_id: z.string().nullable(),
   steps: z.number().nullable().optional(),
   water_estimated: z.number().nullable().optional(),
+  watch_telemetry_observed_at: z.date().nullable().optional(),
+  watch_duration_minutes: z.number().nullable().optional(),
 });
 
 export const exerciseEntriesInitializerSchema = z.object({
@@ -90,6 +93,7 @@ export const exerciseEntriesInitializerSchema = z.object({
   calories_burned: z.number(),
   entry_date: z.date().optional().nullable(),
   entry_time: z.string().optional().nullable(),
+  record_timezone: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
   created_at: z.date().optional().nullable(),
   updated_at: z.date().optional(),
@@ -158,6 +162,8 @@ export const exerciseEntriesInitializerSchema = z.object({
   gear_external_id: z.string().optional().nullable(),
   steps: z.number().optional().nullable(),
   water_estimated: z.number().optional().nullable(),
+  watch_telemetry_observed_at: z.date().optional().nullable(),
+  watch_duration_minutes: z.number().optional().nullable(),
 });
 
 export const exerciseEntriesMutatorSchema =

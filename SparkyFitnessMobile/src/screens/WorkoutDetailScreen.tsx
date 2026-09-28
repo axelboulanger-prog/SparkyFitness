@@ -14,7 +14,7 @@ import FadeView from '../components/FadeView';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCSSVariable } from 'uniwind';
-import Icon from '../components/Icon';
+import Icon, { type IconName } from '../components/Icon';
 import FormInput from '../components/FormInput';
 import Button from '../components/ui/Button';
 import WorkoutFormExerciseList, {
@@ -35,13 +35,17 @@ import {
   formatVolume,
   canReorderDraftExercises,
   exerciseFromSnapshot,
+  summarizeWorkoutHeartRate,
 } from '../utils/workoutSession';
 import { formatLocalizedNumber } from '../localization';
 import {
   useDeleteWorkout,
   useUpdateWorkout,
 } from '../hooks/useExerciseMutations';
-import { promptForActiveWorkoutConflict } from '../hooks/useStartLiveWorkout';
+import {
+  promptForActiveWorkoutConflict,
+  armWatchForActiveSession,
+} from '../hooks/useStartLiveWorkout';
 import { usePreferences } from '../hooks/usePreferences';
 import { useExerciseImageSource } from '../hooks/useExerciseImageSource';
 import { useSelectedExercise } from '../hooks/useSelectedExercise';
@@ -79,6 +83,8 @@ import { useSupersetBorders } from '../components/ActiveWorkoutRail';
 import type { RootStackScreenProps } from '../types/navigation';
 import type { UpdatePresetSessionRequest } from '@workspace/shared';
 import { canEditGroupedWorkout } from '@workspace/shared';
+import { buildExerciseReplaceContext } from '../utils/exerciseReplace';
+import WorkoutFeedbackCard from '../components/WorkoutFeedbackCard';
 
 type Props = RootStackScreenProps<'WorkoutDetail'>;
 
@@ -98,10 +104,11 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
   const calendarSheetRef = useRef<CalendarSheetRef>(null);
   const exerciseListRef = useRef<WorkoutFormExerciseListHandle>(null);
 
-  const [accentPrimary, borderSubtle] = useCSSVariable([
+  const [accentPrimary, heartRateColor, activeEnergyColor] = useCSSVariable([
     '--color-accent-primary',
-    '--color-border-subtle',
-  ]) as [string, string];
+    '--color-heart-rate',
+    '--color-active-energy',
+  ]) as [string, string, string];
   const usesNativeHeader = useNativeIOSHeadersActive();
 
   // Superset display (view mode only): grouped members get a flat left rail
@@ -325,9 +332,10 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
       const store = useActiveWorkoutStore.getState();
       if (atSetId != null) store.startWorkoutAtSet(session, atSetId);
       else store.startWorkout(session);
+      armWatchForActiveSession(t);
       navigation.replace('ActiveWorkout');
     },
-    [session, navigation]
+    [session, navigation, t]
   );
 
   // Start this workout, first resolving any other in-progress session through
@@ -411,9 +419,15 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
   const handleReplaceExercise = useCallback(
     (clientId: string) => {
       setReplaceTarget(clientId);
-      navigation.navigate('ExerciseSearch', { returnKey: route.key });
+      navigation.navigate('ExerciseSearch', {
+        returnKey: route.key,
+        replaceFor: buildExerciseReplaceContext(
+          formState.exercises.find((e) => e.clientId === clientId),
+          formState.exercises
+        ),
+      });
     },
-    [setReplaceTarget, navigation, route.key]
+    [setReplaceTarget, navigation, route.key, formState.exercises]
   );
 
   // Tap an exercise thumbnail → its library detail. Session entries carry a
@@ -609,7 +623,11 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
           0
         );
 
-    const summaryItems: { value: string; label: string }[] = [];
+    const summaryItems: {
+      value: string;
+      label: string;
+      icon?: { name: IconName; color: string };
+    }[] = [];
     summaryItems.push({
       value: String(exerciseCount),
       label: t('workoutDetail.summary.exercise', {
@@ -639,33 +657,81 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
         label: t('workoutDetail.summary.calories', {
           defaultValue: 'Calories',
         }),
+        icon: { name: 'flame', color: activeEnergyColor },
+      });
+    }
+    // Heart rate is read-only — it only arrives from a paired watch or a
+    // synced workout, and there is no field for typing one — so it is shown
+    // from the saved session even while editing.
+    const heartRate = summarizeWorkoutHeartRate(session.exercises);
+    if (heartRate) {
+      summaryItems.push({
+        value: formatLocalizedNumber(Math.round(heartRate.avgBpm)),
+        label: t('workoutDetail.summary.avgHeartRate', {
+          defaultValue: 'Avg HR',
+        }),
+        icon: { name: 'heart-rate', color: heartRateColor },
+      });
+    }
+    if (heartRate?.maxBpm != null) {
+      // Exact, unlike the average: the highest of the per-exercise maxima IS
+      // the workout's maximum.
+      summaryItems.push({
+        value: formatLocalizedNumber(Math.round(heartRate.maxBpm)),
+        label: t('workoutDetail.summary.maxHeartRate', {
+          defaultValue: 'Max HR',
+        }),
+        icon: { name: 'heart-rate', color: heartRateColor },
       });
     }
     if (summaryItems.length === 0) return null;
 
+    // A wrapping three-column grid rather than one divided row. The row was
+    // sized for four items and heart rate made it six, which squeezed a value
+    // as long as "2,350 kg" against its neighbours on a narrow phone. Three
+    // per line holds its width whether the session carries four items or six,
+    // and the count genuinely varies: sets, volume, calories and both heart
+    // rates each appear only when there is something to show.
+    //
+    // Left-aligned with no dividers, so the labels form a column edge the eye
+    // can follow down the grid; centred text with rules between reads as one
+    // strip and stops working the moment it wraps.
+    //
+    // Caption above figure, which is the opposite of a single strip's natural
+    // order and right for a grid: scanning a row of bare numbers means nothing
+    // until the eye drops to the captions, so the caption goes first. Icons
+    // mark only the two measured figures -- calories and heart rate, the ones
+    // a watch supplies -- which also separates them at a glance from the
+    // counts on the first row. Coloured through --color-heart-rate and
+    // --color-active-energy rather than the dashboard's --color-calories,
+    // which is the dietary-calorie blue: these two mark what a watch measured
+    // during the session, and a blue flame next to a blue Start Workout
+    // button would not read as one.
     return (
       <View className="bg-surface rounded-xl p-4">
-        <View className="flex-row items-center justify-around">
-          {summaryItems.map((item, i) => (
-            <React.Fragment key={item.label}>
-              {i > 0 && (
-                <View
-                  style={{
-                    width: 1,
-                    height: 32,
-                    backgroundColor: borderSubtle,
-                  }}
-                />
-              )}
-              <View className="items-center">
-                <Text className="text-lg font-semibold text-text-primary">
+        <View className="flex-row flex-wrap">
+          {summaryItems.map((item) => (
+            <View key={item.label} className="w-1/3 py-1.5 pr-2">
+              <Text className="text-xs text-text-muted" numberOfLines={1}>
+                {item.label}
+              </Text>
+              <View className="flex-row items-center mt-0.5">
+                {item.icon && (
+                  <Icon
+                    name={item.icon.name}
+                    size={14}
+                    color={item.icon.color}
+                    style={{ marginRight: 4 }}
+                  />
+                )}
+                <Text
+                  className="text-lg font-semibold text-text-primary shrink"
+                  numberOfLines={1}
+                >
                   {item.value}
                 </Text>
-                <Text className="text-xs text-text-muted mt-0.5">
-                  {item.label}
-                </Text>
               </View>
-            </React.Fragment>
+            </View>
           ))}
         </View>
       </View>
@@ -887,6 +953,16 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
           )}
         </View>
 
+        {!isEditing && canEdit && (
+          <WorkoutFeedbackCard
+            presetEntryId={session.id}
+            exercises={session.exercises.map((exercise) => ({
+              id: exercise.id,
+              name: exercise.exercise_snapshot?.name ?? '',
+            }))}
+          />
+        )}
+
         {/* Edit controls */}
         {isEditing && (
           <FadeView>
@@ -903,6 +979,22 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
                 multiline
                 style={{ minHeight: 60 }}
               />
+            </View>
+          </FadeView>
+        )}
+
+        {/* Gym / location (view mode) */}
+        {!isEditing && session.location && (
+          <FadeView>
+            <View className="mt-4 px-4">
+              <Text className="text-sm font-medium text-text-secondary mb-1">
+                {t('workoutDetail.labels.location', {
+                  defaultValue: 'Gym / Location',
+                })}
+              </Text>
+              <Text className="text-sm text-text-primary">
+                {session.location}
+              </Text>
             </View>
           </FadeView>
         )}

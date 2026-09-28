@@ -21,6 +21,14 @@ export type SleepStageLane = (typeof SLEEP_STAGE_LANES)[number];
 const FALLBACK_STAGE_LANE: SleepStageLane = 'other';
 
 /**
+ * HealthKit InBed envelopes and unspecified samples. These are not sleep
+ * stages — they belong on the session's bedtime–wake span, not the hypnogram.
+ * `laneForStageType` still maps them to `other` so an unrecognized future value
+ * has a lane; plotted charts skip them via `isPlottedSleepStage`.
+ */
+const UNPLOTTED_STAGE_TYPES = new Set(['in_bed', 'unknown']);
+
+/**
  * Normalizes a server `stage_type` onto a lane.
  *
  * `stage_type` is an unconstrained `varchar(50)`, so anything outside the named stages
@@ -36,6 +44,10 @@ export const laneForStageType = (stageType: string): SleepStageLane => {
 
   return isNamedStage ? (normalized as SleepStageLane) : FALLBACK_STAGE_LANE;
 };
+
+/** False for envelope-only types that should not occupy a hypnogram / timeline lane. */
+export const isPlottedSleepStage = (stageType: string): boolean =>
+  !UNPLOTTED_STAGE_TYPES.has(stageType.toLowerCase());
 
 /** One contiguous run of a single stage, as absolute instants. */
 export interface SleepTimelineSegment {

@@ -8,9 +8,18 @@ import {
   setOnIdentityChanged,
   suppressSessionExpired,
 } from '../services/api/authService';
-import { clearServerConfigCache } from '../services/storage';
+import {
+  clearServerConfigCache,
+  setOnServerConfigDeleted,
+  takeIdentityChangeServerConfigIds,
+} from '../services/storage';
 import type { ServerConfig } from '../services/storage';
 import { addLog } from '../services/LogService';
+import {
+  deleteWatchTelemetryForConfig,
+  notifyWatchTelemetryAccountSwitch,
+} from '../utils/watchTelemetryPersistence';
+import { useFoodSearchSelectionStore } from '../stores/foodSearchSelectionStore';
 
 export type AuthModalReason = 'session_expired' | 'no_configs' | null;
 
@@ -37,10 +46,25 @@ export function useAuth() {
       setSwitchToApiKeyConfig(null);
       setAuthModalReason('no_configs');
     });
+    // A deleted config's saved watch telemetry and queued batches can never
+    // be posted again.
+    setOnServerConfigDeleted(deleteWatchTelemetryForConfig);
     // Everything cached under the previous account has to go, or the new one
     // reads it until each query happens to refetch.
     setOnIdentityChanged(async () => {
+      // Watch telemetry is kept per config, so every config the old identity
+      // may have used is purged: the ones switched away from, captured
+      // before the switch, and the active one. The reader is retried until it
+      // succeeds; restore waits until the ids are read and purged.
+      notifyWatchTelemetryAccountSwitch(takeIdentityChangeServerConfigIds);
       queryClient.clear();
+      // The multi-select food basket store is the same kind of identity-
+      // carrying global as the caches and the cookie jar below: it holds the
+      // previous account's food ids, meal-type ids, and batch outcomes, and
+      // would happily submit them under the new account. cancelBatch also
+      // invalidates any submission still in flight — its outcomes are
+      // discarded rather than reconciled into the cleared basket.
+      useFoodSearchSelectionStore.getState().cancelBatch();
       // The cookie jar is the third thing carrying identity, and the only one
       // that survives dropping every cache: it belongs to the native HTTP
       // client and is keyed by host, not by configured server, so two accounts

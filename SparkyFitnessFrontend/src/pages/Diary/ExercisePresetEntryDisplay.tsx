@@ -16,15 +16,19 @@ import {
   Clock,
   Activity,
   Layers,
+  MapPin,
 } from 'lucide-react';
 import ExerciseEntryDisplay from './ExerciseEntryDisplay';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import {
   formatMinutesToHHMM,
+  formatSecondsClock,
   formatTimeOfDayString,
 } from '@/utils/timeFormatters';
 import { Exercise, ExerciseEntry, PresetSessionEntry } from '@/types/exercises';
 import { earliestEntryTime, setsDurationMinutes } from '@workspace/shared';
+import { useActiveUser } from '@/contexts/ActiveUserContext';
+import WorkoutFeedbackPanel from './WorkoutFeedbackPanel';
 
 interface ExercisePresetEntryDisplayProps {
   presetEntry: PresetSessionEntry;
@@ -60,6 +64,10 @@ const ExercisePresetEntryDisplay: React.FC<ExercisePresetEntryDisplayProps> = ({
   const { t } = useTranslation();
   const { timeFormat } = usePreferences();
   const [isExpanded, setIsExpanded] = useState(false);
+  // The feedback panel autosaves, so only people who can write the diary
+  // get it (#1560); report-only viewers can't save and don't see it here.
+  const { hasWritePermission } = useActiveUser();
+  const canGiveFeedback = hasWritePermission('diary');
 
   const toggleExpansion = useCallback(() => {
     setIsExpanded((prev) => !prev);
@@ -153,6 +161,72 @@ const ExercisePresetEntryDisplay: React.FC<ExercisePresetEntryDisplayProps> = ({
                       {exerciseCount === 1 ? 'exercise' : 'exercises'}
                     </span>
                   )}
+                  {(() => {
+                    const wodDetail = presetEntry.activity_details?.find(
+                      (d) => d.detail_type === 'wod_score'
+                    );
+                    if (!wodDetail?.detail_data) return null;
+                    let data = wodDetail.detail_data;
+                    while (typeof data === 'string') {
+                      try {
+                        data = JSON.parse(data);
+                      } catch {
+                        return null;
+                      }
+                    }
+                    if (!data || typeof data !== 'object') return null;
+                    const wod = data as {
+                      workout_format?: string;
+                      format?: string;
+                      rounds_completed?: number;
+                      rounds?: number;
+                      reps_completed?: number;
+                      extra_reps?: number;
+                      reps?: number;
+                      elapsed_seconds?: number;
+                      time_seconds?: number;
+                      is_rx?: boolean;
+                      status?: string;
+                      scaling_status?: string;
+                    };
+                    const format = (wod.workout_format || wod.format || 'WOD')
+                      .toUpperCase()
+                      .replace('_', ' ');
+                    const rounds = wod.rounds_completed ?? wod.rounds ?? 0;
+                    const reps =
+                      wod.reps_completed ?? wod.extra_reps ?? wod.reps ?? 0;
+                    const isRx =
+                      wod.is_rx === true ||
+                      wod.status === 'rx' ||
+                      wod.scaling_status === 'rx';
+
+                    let scoreStr = '';
+                    if (
+                      wod.workout_format === 'amrap' ||
+                      wod.format === 'amrap'
+                    ) {
+                      scoreStr = `${rounds} rds${reps > 0 ? ` + ${reps} reps` : ''}`;
+                    } else if (
+                      wod.workout_format === 'for_time' ||
+                      wod.format === 'for_time'
+                    ) {
+                      const secs = wod.time_seconds ?? wod.elapsed_seconds;
+                      scoreStr =
+                        typeof secs === 'number'
+                          ? formatSecondsClock(secs)
+                          : 'Done';
+                    } else if (rounds > 0) {
+                      scoreStr = `${rounds} rds`;
+                    }
+
+                    return (
+                      <span className="flex-shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700/50">
+                        {format}
+                        {scoreStr ? ` • ${scoreStr}` : ''}
+                        {` (${isRx ? 'Rx' : 'Scaled'})`}
+                      </span>
+                    );
+                  })()}
                 </div>
                 {presetEntry.exercise_snapshot?.category && (
                   <p className="text-[10px] font-medium uppercase tracking-widest text-gray-400 dark:text-gray-500 mt-0.5">
@@ -184,9 +258,20 @@ const ExercisePresetEntryDisplay: React.FC<ExercisePresetEntryDisplayProps> = ({
             </TooltipProvider>
           </div>
 
-          {/* Description / notes */}
-          {(presetEntry.description || presetEntry.notes) && (
+          {/* Description / notes / gym */}
+          {(presetEntry.description ||
+            presetEntry.notes ||
+            presetEntry.location) && (
             <div className="px-4 pb-2 space-y-0.5">
+              {presetEntry.location && (
+                <p
+                  className="inline-flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400"
+                  title={t('exerciseCard.workoutLocation', 'Gym / Location')}
+                >
+                  <MapPin className="w-3 h-3" />
+                  {presetEntry.location}
+                </p>
+              )}
               {presetEntry.description && (
                 <p className="text-xs text-gray-500 dark:text-gray-400">
                   {presetEntry.description}
@@ -259,6 +344,15 @@ const ExercisePresetEntryDisplay: React.FC<ExercisePresetEntryDisplayProps> = ({
                   'No exercises in this preset.'
                 )}
               </p>
+            )}
+            {hasExercises && canGiveFeedback && (
+              <WorkoutFeedbackPanel
+                presetEntryId={presetEntry.id}
+                exercises={presetEntry.exercises!.map((exerciseEntry) => ({
+                  id: exerciseEntry.id,
+                  name: exerciseEntry.exercise_snapshot?.name ?? '',
+                }))}
+              />
             )}
           </div>
         </CardContent>

@@ -44,6 +44,23 @@ export interface TelemetryRunContext {
    */
   readonly interactive: boolean;
   /**
+   * Re-collect telemetry for sessions the reuse cache already holds, for this
+   * run only.
+   *
+   * Set when the user explicitly asks to re-send workout details — after
+   * deleting the data server-side, say, or once a fix changes what we collect.
+   * Without it those sessions are skipped forever: the cache lives on the
+   * device, so removing the rows on the server does not clear it.
+   *
+   * Deliberately a run flag rather than clearing the cache. The cache is not
+   * range-aware, so wiping it would invalidate every session ever collected,
+   * not just the window the user picked — and every later background run would
+   * then grind back through that whole backlog three at a time, which is the
+   * starvation the cache was added to end (#2191). A flag only affects the
+   * sessions this run already reads, and they are re-committed as normal.
+   */
+  readonly force: boolean;
+  /**
    * The slot count this run started with, for callers that must reserve part
    * of it rather than spend it first-come. Infinite when uncapped.
    */
@@ -76,11 +93,14 @@ export interface TelemetryRunContext {
 export const createTelemetryRunContext = (options?: {
   budget?: number;
   interactive?: boolean;
+  force?: boolean;
 }): TelemetryRunContext => {
   let remaining = options?.budget ?? Number.POSITIVE_INFINITY;
   let collected: string[] = [];
   return {
     interactive: options?.interactive ?? true,
+    // Defaults off: only an explicit user action re-reads what is cached.
+    force: options?.force ?? false,
     budget: options?.budget ?? Number.POSITIVE_INFINITY,
     claim: (): boolean => {
       if (remaining <= 0) return false;

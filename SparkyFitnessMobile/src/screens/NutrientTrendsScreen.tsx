@@ -5,26 +5,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useScreenHeader } from '../hooks/useScreenHeader';
 import { getAppLocale, formatLocalizedNumber } from '../localization';
-import {
-  useNutritionTrends,
-  type TrendRange,
-} from '../hooks/useNutritionTrends';
+import { useNutritionTrends } from '../hooks/useNutritionTrends';
+import { trendRangeSegments, type TrendRange } from '../utils/trendRange';
 import { useNativeIOSHeadersActive } from '../services/nativeTabBarPreference';
 import { useActiveWorkoutBarPadding } from '../components/ActiveWorkoutBar';
-import SegmentedControl, { type Segment } from '../components/SegmentedControl';
+import SegmentedControl from '../components/SegmentedControl';
 import StatusView from '../components/StatusView';
 import NutrientBarChart from '../components/NutrientBarChart';
 import type { RootStackScreenProps } from '../types/navigation';
 
 type NutrientTrendsScreenProps = RootStackScreenProps<'NutrientTrends'>;
-
-const RANGE_SEGMENTS = (
-  t: (key: string, options: { defaultValue: string }) => string
-): Segment<TrendRange>[] => [
-  { key: '7d', label: t('ranges.7d', { defaultValue: '7d' }) },
-  { key: '30d', label: t('ranges.30d', { defaultValue: '30d' }) },
-  { key: '90d', label: t('ranges.90d', { defaultValue: '90d' }) },
-];
 
 const NutrientTrendsScreen: React.FC<NutrientTrendsScreenProps> = ({
   route,
@@ -128,7 +118,7 @@ const NutrientTrendsScreen: React.FC<NutrientTrendsScreenProps> = ({
         {/* Segmented Range Control */}
         <View className="mb-4">
           <SegmentedControl
-            segments={RANGE_SEGMENTS(t)}
+            segments={trendRangeSegments(t)}
             activeKey={range}
             onSelect={setRange}
           />

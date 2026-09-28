@@ -82,24 +82,21 @@ describe('appPreferencesStore', () => {
       expect(state.hiddenHealthTrends).toEqual([]);
     });
 
-    it('writes order and hidden keys together', () => {
-      useAppPreferencesStore
-        .getState()
-        .setHealthTrendLayout(['weight', 'sleep', 'steps'], ['steps']);
-
-      const state = useAppPreferencesStore.getState();
-      expect(state.healthTrendOrder).toEqual(['weight', 'sleep', 'steps']);
-      expect(state.hiddenHealthTrends).toEqual(['steps']);
-    });
-
-    it('clears hidden keys when every graph is shown again', () => {
+    it('writes order and hidden keys independently with new setters', () => {
       const store = useAppPreferencesStore.getState();
+      store.setHealthTrendOrder(['weight', 'sleep', 'steps']);
+      expect(useAppPreferencesStore.getState().healthTrendOrder).toEqual([
+        'weight',
+        'sleep',
+        'steps',
+      ]);
 
-      store.setHealthTrendLayout(['steps', 'weight', 'sleep'], ['sleep']);
-      useAppPreferencesStore
-        .getState()
-        .setHealthTrendLayout(['steps', 'weight', 'sleep'], []);
+      store.setHealthTrendHidden('steps', true);
+      expect(useAppPreferencesStore.getState().hiddenHealthTrends).toEqual([
+        'steps',
+      ]);
 
+      store.setHealthTrendHidden('steps', false);
       expect(useAppPreferencesStore.getState().hiddenHealthTrends).toEqual([]);
     });
 
@@ -126,6 +123,33 @@ describe('appPreferencesStore', () => {
       expect(state.soundsEnabled).toBe(false); // persisted values honoured
       expect(state.healthTrendOrder).toEqual([...HEALTH_TREND_KEYS]);
       expect(state.hiddenHealthTrends).toEqual([]);
+    });
+  });
+
+  describe('dashboard card preferences', () => {
+    it('defaults to the full registry order', () => {
+      const state = useAppPreferencesStore.getState();
+      expect(state.dashboardCardOrder).toEqual([
+        'calorieRing',
+        'askSparky',
+        'macros',
+        'exercise',
+        'hydration',
+        'caffeine',
+        'fasting',
+        'cycle',
+        'medications',
+        'progressPhotos',
+        'healthTrends',
+      ]);
+    });
+
+    it('updates dashboard card order', () => {
+      const newOrder = ['fasting', 'hydration', 'caffeine'] as never[];
+      useAppPreferencesStore.getState().setDashboardCardOrder(newOrder);
+      expect(useAppPreferencesStore.getState().dashboardCardOrder).toEqual(
+        newOrder
+      );
     });
   });
 

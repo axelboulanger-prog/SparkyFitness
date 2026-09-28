@@ -1,8 +1,10 @@
 import SyncScreen from '../screens/SyncScreen';
 import ImportHistoryScreen from '../screens/ImportHistoryScreen';
 import LogScreen from '../screens/LogScreen';
+import { useFoodSearchSelectionStore } from '../stores/foodSearchSelectionStore';
 import FoodSearchScreen from '../screens/FoodSearchScreen';
 import FoodEntryAddScreen from '../screens/FoodEntryAddScreen';
+import FoodEntryMultiAddScreen from '../screens/FoodEntryMultiAddScreen';
 import FoodEntryViewScreen from '../screens/FoodEntryViewScreen';
 import EditLoggedMealScreen from '../screens/EditLoggedMealScreen';
 import MealTypeDetailScreen from '../screens/MealTypeDetailScreen';
@@ -65,6 +67,8 @@ import MedicationFormScreen from '../screens/MedicationFormScreen';
 import MedicationScheduleFormScreen from '../screens/MedicationScheduleFormScreen';
 import DailyNutritionDetailsScreen from '../screens/DailyNutritionDetailsScreen';
 import NutrientTrendsScreen from '../screens/NutrientTrendsScreen';
+import ExerciseStatisticsScreen from '../screens/ExerciseStatisticsScreen';
+import CardioSessionScreen from '../screens/CardioSessionScreen';
 import FamilyMembersScreen from '../screens/FamilyMembersScreen';
 import FamilyDiaryScreen from '../screens/FamilyDiaryScreen';
 import FamilyMealDetailScreen from '../screens/FamilyMealDetailScreen';
@@ -89,6 +93,15 @@ export const SafeExerciseDetail = withErrorBoundary(ExerciseDetailScreen, 'Exerc
 export const SafeWorkoutPresetDetail = withErrorBoundary(WorkoutPresetDetailScreen, 'WorkoutPresetDetail', { canGoBack: true });
 export const SafeFoodSearch = withErrorBoundary(FoodSearchScreen, 'FoodSearch', { canGoBack: true });
 export const SafeFoodEntryAdd = withErrorBoundary(FoodEntryAddScreen, 'FoodEntryAdd', { canGoBack: true });
+// Kept on one line: nativeHeaderContract.test.ts statically maps
+// withErrorBoundary(Component, 'Name') registrations by regex.
+// A multi-add batch may still have requests in flight whose outcomes the
+// user must see recorded — scoped here rather than in the shared boundary
+// so no other screen's crash recovery can be dead-ended by it.
+export const SafeFoodEntryMultiAdd = withErrorBoundary(FoodEntryMultiAddScreen, 'FoodEntryMultiAdd', {
+  canGoBack: true,
+  goBackGuard: () => !useFoodSearchSelectionStore.getState().isSubmitting,
+});
 export const SafeFoodForm = withErrorBoundary(FoodFormScreen, 'FoodForm', { canGoBack: true });
 export const SafeEditBarcode = withErrorBoundary(EditBarcodeScreen, 'EditBarcode', { canGoBack: true });
 export const SafeExerciseForm = withErrorBoundary(ExerciseFormScreen, 'ExerciseForm', { canGoBack: true });
@@ -132,6 +145,8 @@ export const SafeAbout = withErrorBoundary(AboutScreen, 'About', { canGoBack: tr
 export const SafeWhatsNew = withErrorBoundary(WhatsNewScreen, 'WhatsNew', { canGoBack: true });
 export const SafeDailyNutritionDetails = withErrorBoundary(DailyNutritionDetailsScreen, 'DailyNutritionDetails', { canGoBack: true });
 export const SafeNutrientTrends = withErrorBoundary(NutrientTrendsScreen, 'NutrientTrends', { canGoBack: true });
+export const SafeExerciseStatistics = withErrorBoundary(ExerciseStatisticsScreen, 'ExerciseStatistics', { canGoBack: true });
+export const SafeCardioSession = withErrorBoundary(CardioSessionScreen, 'CardioSession', { canGoBack: true });
 export const SafeFamilyMembers = withErrorBoundary(FamilyMembersScreen, 'FamilyMembers', { canGoBack: true });
 export const SafeFamilyDiary = withErrorBoundary(FamilyDiaryScreen, 'FamilyDiary', { canGoBack: true });
 export const SafeFamilyMealDetail = withErrorBoundary(FamilyMealDetailScreen, 'FamilyMealDetail', { canGoBack: true });

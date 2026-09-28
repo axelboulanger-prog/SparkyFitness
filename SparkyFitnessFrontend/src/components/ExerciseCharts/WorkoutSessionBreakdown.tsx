@@ -5,8 +5,11 @@ import { formatWeight } from '@/utils/numberFormatting';
 import { FaChevronDown, FaChevronUp, FaDumbbell } from 'react-icons/fa';
 import { useBodyMapSvgQuery } from '@/hooks/Exercises/useExercises';
 import { useGroupedWorkoutSession } from '@/hooks/Exercises/useExercises';
-import { svgClassToSchemaName } from '@/constants/exercises';
-import type { ExerciseEntryResponse } from '@workspace/shared';
+import {
+  svgClassToSchemaName,
+  type ExerciseEntryResponse,
+} from '@workspace/shared';
+import { localizeMuscle } from '@/utils/exerciseTaxonomy';
 import './WorkoutSessionBodyMap.css';
 
 const formatExerciseName = (name: string | undefined | null): string => {
@@ -517,7 +520,7 @@ export const WorkoutSessionBreakdown = ({
                           )}
                         </td>
                         <td className="py-3 px-3 font-bold text-foreground capitalize">
-                          {mgSummary.muscleName}
+                          {localizeMuscle(t, mgSummary.muscleName)}
                         </td>
                         <td className="py-3 px-3 font-bold">
                           {formatSeconds(mgSummary.totalTimeSeconds)}

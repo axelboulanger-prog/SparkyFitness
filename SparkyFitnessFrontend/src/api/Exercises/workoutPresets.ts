@@ -38,6 +38,14 @@ export const deleteWorkoutPreset = async (
   });
 };
 
+export const getWorkoutPresetById = async (
+  id: string | number
+): Promise<WorkoutPreset> => {
+  return apiCall(`/workout-presets/${id}`, {
+    method: 'GET',
+  });
+};
+
 interface WorkoutSearchParams {
   searchTerm: string;
   limit?: number;

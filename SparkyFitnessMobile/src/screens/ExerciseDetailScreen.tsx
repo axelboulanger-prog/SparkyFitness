@@ -1,6 +1,13 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { View, Text, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  Alert,
+  Pressable,
+} from 'react-native';
 import { CommonActions, StackActions } from '@react-navigation/native';
 import {
   Directions,
@@ -14,6 +21,7 @@ import { useReducedMotion } from 'react-native-reanimated';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCSSVariable } from 'uniwind';
 import Button from '../components/ui/Button';
+import ImageLightbox from '../components/ImageLightbox';
 import ExerciseImageCrossfade, {
   sourceMayHaveTransparency,
 } from '../components/ExerciseImageCrossfade';
@@ -279,10 +287,23 @@ const ExerciseDetailScreen: React.FC<ExerciseDetailScreenProps> = ({
   }, [exercise.images, getImageSource]);
 
   const pairAspectMatch = useImagePairAspectMatch(imageSources);
+  const [imageViewerOpen, setImageViewerOpen] = useState(false);
 
-  const equipmentText = formatList(exercise.equipment ?? []);
-  const primaryMusclesText = formatList(exercise.primary_muscles ?? []);
-  const secondaryMusclesText = formatList(exercise.secondary_muscles ?? []);
+  const equipmentText = formatList(
+    (exercise.equipment ?? []).map((eq) =>
+      localizeExerciseTaxonomyValue(t, 'equipment', eq)
+    )
+  );
+  const primaryMusclesText = formatList(
+    (exercise.primary_muscles ?? []).map((m) =>
+      localizeExerciseTaxonomyValue(t, 'muscle', m)
+    )
+  );
+  const secondaryMusclesText = formatList(
+    (exercise.secondary_muscles ?? []).map((m) =>
+      localizeExerciseTaxonomyValue(t, 'muscle', m)
+    )
+  );
   const description = exercise.description?.trim() ?? '';
   const categoryText = localizeExerciseTaxonomyValue(
     t,
@@ -465,6 +486,37 @@ const ExerciseDetailScreen: React.FC<ExerciseDetailScreenProps> = ({
       </View>
     ) : null;
 
+  // Tap the gallery to view the images full-screen (#1691).
+  // Same non-empty paths the carousel pages over, so indexes line up.
+  const galleryImages = (exercise.images ?? []).filter((path) =>
+    Boolean(path && getImageSource(path) !== null)
+  );
+  const imageGallery = imageCarousel ? (
+    <>
+      <Pressable
+        onPress={() => setImageViewerOpen(true)}
+        accessibilityRole="button"
+        accessibilityLabel={t('exerciseDetail.viewImages', {
+          defaultValue: 'View images full screen',
+        })}
+      >
+        {imageCarousel}
+      </Pressable>
+      <ImageLightbox
+        visible={imageViewerOpen}
+        images={galleryImages}
+        initialIndex={Math.min(
+          activeImageIndex,
+          Math.max(0, galleryImages.length - 1)
+        )}
+        title={exercise.name}
+        onClose={() => setImageViewerOpen(false)}
+        getImageSource={getImageSource}
+        autoPlay={false}
+      />
+    </>
+  ) : null;
+
   const handleLog = () => {
     navigation.navigate('ActivityAdd', {
       selectedExercise: exercise,
@@ -478,6 +530,15 @@ const ExerciseDetailScreen: React.FC<ExerciseDetailScreenProps> = ({
       mode: 'edit-exercise',
       exercise,
       returnKey: route.key,
+    });
+  };
+
+  // Any exercise can be copied (own, System or public) into a new private
+  // custom one; the form opens pre-filled so the variation can be edited.
+  const handleDuplicate = () => {
+    navigation.navigate('ExerciseForm', {
+      mode: 'create-exercise',
+      duplicateOf: exercise,
     });
   };
 
@@ -535,6 +596,21 @@ const ExerciseDetailScreen: React.FC<ExerciseDetailScreenProps> = ({
   };
 
   const rightItems: HeaderItem[] = [
+    ...(isConnected && !selectionReturnKey
+      ? [
+          {
+            kind: 'icon',
+            sfSymbol: 'doc.on.doc',
+            ionicon: 'copy-outline',
+            role: 'secondary',
+            onPress: handleDuplicate,
+            accessibilityLabel: t('exerciseDetail.duplicate', {
+              defaultValue: 'Duplicate exercise',
+            }),
+            identifier: 'exercise-detail-duplicate',
+          } as const,
+        ]
+      : []),
     ...(canManageExercise
       ? [
           {
@@ -585,8 +661,10 @@ const ExerciseDetailScreen: React.FC<ExerciseDetailScreenProps> = ({
   ];
 
   const header = useScreenHeader({
-    title: exercise.name,
-    nativeTitle: exercise.name,
+    // The name is a left-aligned heading in the body instead of a centred
+    // bar title, so it never collides with the right-side actions.
+    title: '',
+    nativeTitle: '',
     borderless: true,
     left: { kind: 'back' },
     right: rightItems.length > 0 ? rightItems : null,
@@ -610,6 +688,13 @@ const ExerciseDetailScreen: React.FC<ExerciseDetailScreenProps> = ({
             gap: 16,
           }}
         >
+          <Text
+            className="text-text-primary text-3xl font-bold"
+            accessibilityRole="header"
+          >
+            {exercise.name}
+          </Text>
+
           {segments.length > 1 ? (
             <SegmentedControl
               segments={segments}
@@ -628,7 +713,7 @@ const ExerciseDetailScreen: React.FC<ExerciseDetailScreenProps> = ({
             />
           ) : resolvedTab === 'how-to' ? (
             <>
-              {imageCarousel}
+              {imageGallery}
 
               {instructionSteps.length > 0 ? (
                 <View className="bg-surface rounded-xl p-4">
@@ -692,7 +777,7 @@ const ExerciseDetailScreen: React.FC<ExerciseDetailScreenProps> = ({
             </>
           ) : (
             <>
-              {imageCarousel}
+              {imageGallery}
 
               {bestSet || lastSet || exercise.calories_per_hour > 0 ? (
                 <View className="flex-row gap-3">

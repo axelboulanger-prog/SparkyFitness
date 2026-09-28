@@ -19,7 +19,12 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { instantHourMinute, userHourMinute } from '@workspace/shared';
+import {
+  instantHourMinute,
+  userHourMinute,
+  WORKOUT_LOCATION_MAX_LENGTH,
+} from '@workspace/shared';
+import { useWorkoutLocations } from '@/hooks/Exercises/useExerciseEntries';
 import type {
   WorkoutPlaybackDraft,
   WorkoutPlaybackStats,
@@ -48,6 +53,7 @@ interface WorkoutPlaybackSummaryProps {
   onPauseResumeRest: () => void;
   onSkipRest: () => void;
   onSessionNotesChange: (value: string) => void;
+  onLocationChange: (value: string) => void;
   onStartTimeChange: (value: string) => void;
 }
 
@@ -67,9 +73,11 @@ const WorkoutPlaybackSummary = ({
   onPauseResumeRest,
   onSkipRest,
   onSessionNotesChange,
+  onLocationChange,
   onStartTimeChange,
 }: WorkoutPlaybackSummaryProps) => {
   const { t } = useTranslation();
+  const { data: locationSuggestions = [] } = useWorkoutLocations();
 
   const startTime = (() => {
     if (!draft.started_at) return '';
@@ -190,46 +198,74 @@ const WorkoutPlaybackSummary = ({
             </div>
           </div>
 
-          {/* Start Time */}
-          <div className="space-y-1.5 max-w-[280px]">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="startTime" className="text-sm">
-                Start Time
-              </Label>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => onStartTimeChange('')}
-                  disabled={!startTime}
-                  className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-muted-foreground shadow-sm hover:bg-destructive/10 hover:text-destructive transition-colors disabled:opacity-40 disabled:pointer-events-none"
-                  title="Clear time"
-                >
-                  <X className="h-4 w-4" />
-                  Clear
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const { hour, minute } = userHourMinute(timezone);
-                    onStartTimeChange(
-                      `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
-                    );
-                  }}
-                  className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
-                  title="Set to current local time"
-                >
-                  <Clock className="h-4 w-4" />
-                  Now
-                </button>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            {/* Start Time */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="startTime" className="text-sm">
+                  Start Time
+                </Label>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => onStartTimeChange('')}
+                    disabled={!startTime}
+                    className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-muted-foreground shadow-sm hover:bg-destructive/10 hover:text-destructive transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                    title="Clear time"
+                  >
+                    <X className="h-4 w-4" />
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const { hour, minute } = userHourMinute(timezone);
+                      onStartTimeChange(
+                        `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+                      );
+                    }}
+                    className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+                    title="Set to current local time"
+                  >
+                    <Clock className="h-4 w-4" />
+                    Now
+                  </button>
+                </div>
               </div>
+              <Input
+                id="startTime"
+                type="time"
+                value={startTime}
+                onChange={(e) => onStartTimeChange(e.target.value)}
+                className="text-sm h-9"
+              />
             </div>
-            <Input
-              id="startTime"
-              type="time"
-              value={startTime}
-              onChange={(e) => onStartTimeChange(e.target.value)}
-              className="text-sm h-9"
-            />
+
+            {/* Gym / Location */}
+            <div className="space-y-1.5">
+              <Label htmlFor="location" className="text-sm">
+                {t('exercise.workoutPlaybackDialog.location', 'Gym / Location')}
+              </Label>
+              <Input
+                id="location"
+                type="text"
+                placeholder={t(
+                  'exercise.workoutPlaybackDialog.locationPlaceholder',
+                  'e.g., Downtown Equinox, Garage Gym'
+                )}
+                value={draft.location ?? ''}
+                onChange={(e) => onLocationChange(e.target.value)}
+                maxLength={WORKOUT_LOCATION_MAX_LENGTH}
+                list="workout-location-suggestions"
+                autoComplete="off"
+                className="text-sm h-9"
+              />
+              <datalist id="workout-location-suggestions">
+                {locationSuggestions.map((location) => (
+                  <option key={location} value={location} />
+                ))}
+              </datalist>
+            </div>
           </div>
 
           <div className="space-y-1">

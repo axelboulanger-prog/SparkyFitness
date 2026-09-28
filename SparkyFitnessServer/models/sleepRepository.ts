@@ -1,5 +1,9 @@
 import { getClient } from '../db/poolManager.js';
 import { log } from '../config/logging.js';
+import {
+  sleepStageMergeWindow,
+  scoredStageRemaindersOutsideWindow,
+} from '../utils/sleepStageAggregates.js';
 
 async function upsertSleepEntry(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -364,6 +368,60 @@ async function deleteSupersededSleepStagesWithClient(
       ? s.end_time.toISOString()
       : new Date(s.end_time).toISOString()
   );
+  const keptKeys = new Set(
+    keptStarts.map((start, index) => `${start}|${keptEnds[index]}`)
+  );
+  const crossing = await client.query(
+    `SELECT id, stage_type, start_time, end_time
+     FROM sleep_entry_stages
+     WHERE entry_id = $1
+       AND user_id = $2
+       AND start_time < $4
+       AND end_time > $3`,
+    [entryId, userId, windowStart, windowEnd]
+  );
+  for (const row of crossing.rows) {
+    const rowStart =
+      row.start_time instanceof Date
+        ? row.start_time.toISOString()
+        : new Date(row.start_time).toISOString();
+    const rowEnd =
+      row.end_time instanceof Date
+        ? row.end_time.toISOString()
+        : new Date(row.end_time).toISOString();
+    if (keptKeys.has(`${rowStart}|${rowEnd}`)) continue;
+    const remainders = scoredStageRemaindersOutsideWindow(
+      row,
+      new Date(windowStart),
+      new Date(windowEnd)
+    );
+    if (!remainders || remainders.length === 0) continue;
+    // Delete first. Updating the crossing row onto a remainder can land on a
+    // stage that already has that (entry_id, start_time, end_time). Leave that
+    // existing row alone: it sits outside the window and the incoming upsert
+    // is what replaces an exact interval.
+    await client.query(
+      `DELETE FROM sleep_entry_stages
+       WHERE id = $1 AND entry_id = $2 AND user_id = $3`,
+      [row.id, entryId, userId]
+    );
+    for (const remainder of remainders) {
+      await client.query(
+        `INSERT INTO sleep_entry_stages
+           (entry_id, user_id, stage_type, start_time, end_time, duration_in_seconds)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (entry_id, start_time, end_time) DO NOTHING`,
+        [
+          entryId,
+          userId,
+          row.stage_type,
+          remainder.start_time,
+          remainder.end_time,
+          remainder.duration_in_seconds,
+        ]
+      );
+    }
+  }
   const result = await client.query(
     `DELETE FROM sleep_entry_stages s
      WHERE s.entry_id = $1
@@ -407,20 +465,17 @@ async function mergeSleepStageEvents(
     const normalizedEvents = sleepStageEvents.map((event) =>
       normalizeSleepStageEventData(event, userId)
     );
-    const startMs = normalizedEvents.map((s) =>
-      new Date(s.start_time).getTime()
-    );
-    const endMs = normalizedEvents.map((s) => new Date(s.end_time).getTime());
-    const payloadStart = new Date(Math.min(...startMs));
-    const payloadEnd = new Date(Math.max(...endMs));
-    await deleteSupersededSleepStagesWithClient(
-      client,
-      userId,
-      entryId,
-      payloadStart,
-      payloadEnd,
-      normalizedEvents
-    );
+    const mergeWindow = sleepStageMergeWindow(normalizedEvents);
+    if (mergeWindow) {
+      await deleteSupersededSleepStagesWithClient(
+        client,
+        userId,
+        entryId,
+        mergeWindow.start,
+        mergeWindow.end,
+        normalizedEvents
+      );
+    }
     const results = [];
     for (const stageEvent of normalizedEvents) {
       results.push(

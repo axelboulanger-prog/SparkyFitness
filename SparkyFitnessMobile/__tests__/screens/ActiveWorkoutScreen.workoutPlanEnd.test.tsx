@@ -233,12 +233,24 @@ function makeSession(): PresetSessionResponse {
 
 type ActiveWorkoutProps = RootStackScreenProps<'ActiveWorkout'>;
 
-const mockReplace = jest.fn();
+// Real navigation stops reporting the screen focused once it has navigated
+// away, which is how the screen tells its own Finish/Discard apart from a
+// workout cleared elsewhere (e.g. ended on the watch).
+let screenFocused = true;
+beforeEach(() => {
+  screenFocused = true;
+});
+const mockReplace = jest.fn(() => {
+  screenFocused = false;
+});
 
 const navigation = {
-  goBack: jest.fn(),
+  goBack: jest.fn(() => {
+    screenFocused = false;
+  }),
   navigate: jest.fn(),
   replace: mockReplace,
+  isFocused: jest.fn(() => screenFocused),
   canGoBack: jest.fn(() => true),
   addListener: jest.fn(() => jest.fn()),
 } as unknown as ActiveWorkoutProps['navigation'];

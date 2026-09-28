@@ -15,7 +15,7 @@ Test: `tests/permissionUtils.test.ts`.
 
 ## Domain → Permission Mapping
 
-**For the authoritative table-to-permission mapping and RLS tier classification, see [`../docs/content/8.developer/11.database-security-tiers.md`](../docs/content/8.developer/11.database-security-tiers.md).** It lists every table, its permission type, and whether it's Tier 1 (owner-only), Tier 2 (owner-write, delegate-read), or Tier 3 (owner-read, delegate-read, external-read).
+**For the authoritative table-to-permission mapping and RLS tier classification, see [`../docs/src/developer/database-security-tiers.md`](../docs/src/developer/database-security-tiers.md).** It lists every table, its permission type, and whether it's Tier 1 (owner-only), Tier 2 (owner-write, delegate-read), or Tier 3 (owner-read, delegate-read, external-read).
 
 Quick reference:
 - **Tier 1** — Credentials, auth, admin data (owner-only, RLS is strict)

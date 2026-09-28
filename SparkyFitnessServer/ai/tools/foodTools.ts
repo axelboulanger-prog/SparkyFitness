@@ -668,6 +668,100 @@ const FULL_ENTRY_DROP: readonly string[] = [
   'updated_by_user_id',
 ];
 
+const NUTRIENT_FIELDS = [
+  'calories',
+  'protein',
+  'carbs',
+  'fat',
+  'saturated_fat',
+  'polyunsaturated_fat',
+  'monounsaturated_fat',
+  'trans_fat',
+  'cholesterol',
+  'sodium',
+  'potassium',
+  'dietary_fiber',
+  'sugars',
+  'vitamin_a',
+  'vitamin_c',
+  'calcium',
+  'iron',
+  'caffeine_mg',
+  'water_ml',
+  'alcohol_g',
+] as const;
+
+function projectFoodDiaryEntry(
+  row: Record<string, unknown>,
+  dropFields: readonly string[] = DIARY_ENTRY_DROP
+): Record<string, unknown> {
+  const compacted = compactRecord(row, dropFields);
+  const quantity = Number(row.quantity);
+  const storedUnit = typeof row.unit === 'string' ? row.unit : 'g';
+  const isLegacyAmbiguous = isAmbiguousLegacyFoodUnit(storedUnit);
+  const isServingCount = normalizeFoodUnit(storedUnit) === 'serving';
+  const servingUnit =
+    typeof row.serving_unit === 'string' ? row.serving_unit : null;
+  const compatibleUnit =
+    isServingCount ||
+    (servingUnit !== null &&
+      normalizeServingUnit(storedUnit) === normalizeServingUnit(servingUnit));
+
+  const parsedServingSize = Number(row.serving_size);
+  const hasValidServingSize =
+    Number.isFinite(parsedServingSize) && parsedServingSize > 0;
+  const effectiveServingSize = hasValidServingSize
+    ? parsedServingSize
+    : isServingCount
+      ? 1
+      : null;
+  const consumedQuantity = isServingCount
+    ? quantity * (hasValidServingSize ? parsedServingSize : 1)
+    : quantity;
+
+  if (
+    !isLegacyAmbiguous &&
+    compatibleUnit &&
+    Number.isFinite(quantity) &&
+    effectiveServingSize !== null
+  ) {
+    const multiplier = consumedQuantity / effectiveServingSize;
+    for (const field of NUTRIENT_FIELDS) {
+      if (
+        row[field] !== null &&
+        row[field] !== undefined &&
+        row[field] !== ''
+      ) {
+        const val = Number(row[field]);
+        if (Number.isFinite(val)) {
+          compacted[field] = Number((val * multiplier).toFixed(3));
+        }
+      }
+    }
+
+    if (
+      row.custom_nutrients &&
+      typeof row.custom_nutrients === 'object' &&
+      !Array.isArray(row.custom_nutrients)
+    ) {
+      const scaledCustom: Record<string, number> = {};
+      for (const [key, val] of Object.entries(
+        row.custom_nutrients as Record<string, unknown>
+      )) {
+        const num = Number(val);
+        if (Number.isFinite(num)) {
+          scaledCustom[key] = Number((num * multiplier).toFixed(3));
+        }
+      }
+      if (Object.keys(scaledCustom).length > 0) {
+        compacted.custom_nutrients = scaledCustom;
+      }
+    }
+  }
+
+  return compacted;
+}
+
 // Catalog row for the JSON helpers: the server's default_variant JSON is
 // folded into MCP's `variants` array shape, both compacted.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2867,7 +2961,9 @@ Actions:
             end_date: endDate,
             food_entries: page
               .filter((item) => item.kind === 'food')
-              .map((item) => compactRecord(item.entry, DIARY_ENTRY_DROP)),
+              .map((item) =>
+                projectFoodDiaryEntry(item.entry, DIARY_ENTRY_DROP)
+              ),
             meal_entries: page
               .filter((item) => item.kind === 'meal')
               .map((item) => compactRecord(item.entry, DIARY_MEAL_DROP)),
@@ -2941,7 +3037,7 @@ Actions:
           const limit = Math.min(Math.max(parsed.data.limit ?? 50, 1), 200);
           const rows = await foodRepository.getRecentFoodEntries(userId, limit);
           const data = rows.map((r: Record<string, unknown>) =>
-            compactRecord(r, FULL_ENTRY_DROP)
+            projectFoodDiaryEntry(r, FULL_ENTRY_DROP)
           );
           return formatJsonResult(data);
         } catch (error) {
@@ -2985,7 +3081,7 @@ Actions:
           );
           const data = buildPaginatedResult(
             rows.map((r: Record<string, unknown>) =>
-              compactRecord(r, FULL_ENTRY_DROP)
+              projectFoodDiaryEntry(r, FULL_ENTRY_DROP)
             ),
             totalCount,
             offset

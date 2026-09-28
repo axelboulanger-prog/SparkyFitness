@@ -489,10 +489,22 @@ async function queryExerciseActivities(
       params.push(minKm);
       whereClauses.push(`distance >= $${params.length}`);
     } else if (!request.category) {
+      // Word boundaries, not substrings: "crunch" contains "run" and was
+      // showing up as cardio. Strength is out even when an old row was
+      // stored with category Cardio, or when a gym session has a little
+      // distance from walking between sets. Past those exclusions, any
+      // positive distance counts: a synced paddle can reuse a "General"
+      // reps-only custom exercise and still carry a route.
       whereClauses.push(`(
-        (distance IS NOT NULL AND distance > 0)
-        OR LOWER(COALESCE(category, '')) IN ('cardio', 'running', 'cycling', 'walking', 'swimming', 'endurance', 'garmin')
-        OR LOWER(exercise_name) ~ '(run|walk|cycle|swim|hike|treadmill|elliptical|rower|garmin|cardio)'
+        COALESCE(modality, '') <> 'weight_reps'
+        AND LOWER(COALESCE(category, '')) NOT IN ('strength', 'powerlifting', 'olympic weightlifting', 'strongman')
+        AND LOWER(exercise_name) !~* '\\m(strength|crunch|sit-?up|plank)\\M'
+        AND (
+          COALESCE(modality, '') IN ('duration', 'duration_distance')
+          OR LOWER(COALESCE(category, '')) IN ('cardio', 'running', 'cycling', 'walking', 'swimming', 'endurance', 'garmin')
+          OR LOWER(exercise_name) ~* '\\m(run(ning|s)?|walk(ing|s)?|cycl(e|ing)|bike|biking|swim(ming)?|hik(e|ing)|treadmill|elliptical|rower|rowing|cardio|stairs?)\\M'
+          OR COALESCE(distance, 0) > 0
+        )
       )`);
     }
     if (maxKm !== undefined) {
@@ -852,7 +864,11 @@ async function getPersonalRecordMatrix(
           e.entry_date as achieved_on
         FROM public.exercise_entry_sets s
         JOIN public.exercise_entries e ON s.exercise_entry_id = e.id
+        LEFT JOIN public.exercise_preset_entries epe ON epe.id = e.exercise_preset_entry_id
         WHERE e.user_id = $1 AND s.weight > 0 AND s.reps > 0
+          -- Sets done inside interval/WOD sessions aren't comparable strength
+          -- efforts; ad-hoc entries (no session) count as standard.
+          AND COALESCE(epe.workout_format, 'standard') = 'standard'
         -- Ties broken by the earliest date: that is when the record was first
         -- reached, not the last time it was equalled.
         ORDER BY e.exercise_name, estimated_one_rm DESC, e.entry_date ASC

@@ -108,6 +108,7 @@ BEGIN
     'exercise_entry_laps',
     'exercise_entry_gps_points',
     'exercise_entry_hr_zones',
+    'workout_feedback',
     'health_metric_samples',
     'vitals_entries',
     'daily_health_metrics'
@@ -630,6 +631,31 @@ USING (
 -- The modify policy for exercise_entries is already handled by create_diary_policy('exercise_entries')
 
 SELECT create_diary_policy('exercise_preset_entries');
+
+-- Workout feedback (#1560) follows the diary rows it describes: readable by
+-- the owner and diary/report delegates, writable by the owner and
+-- can_manage_diary delegates. WITH CHECK also pins the referenced
+-- session/exercise to the same owner, so a row can never attach feedback to
+-- someone else's workout.
+CREATE POLICY select_policy ON public.workout_feedback FOR SELECT TO PUBLIC
+USING (has_diary_read_access(user_id));
+CREATE POLICY modify_policy ON public.workout_feedback FOR ALL TO PUBLIC
+USING (has_diary_access(user_id))
+WITH CHECK (
+  has_diary_access(user_id) AND (
+    (exercise_preset_entry_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM public.exercise_preset_entries epe
+      WHERE epe.id = workout_feedback.exercise_preset_entry_id
+        AND epe.user_id = workout_feedback.user_id
+    ))
+    OR
+    (exercise_entry_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM public.exercise_entries ee
+      WHERE ee.id = workout_feedback.exercise_entry_id
+        AND ee.user_id = workout_feedback.user_id
+    ))
+  )
+);
 SELECT create_diary_policy('food_entry_meals');
 SELECT create_checkin_policy('sleep_entries');
 SELECT create_checkin_policy('sleep_entry_stages');

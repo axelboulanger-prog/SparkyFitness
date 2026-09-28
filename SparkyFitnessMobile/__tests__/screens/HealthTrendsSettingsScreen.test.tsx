@@ -75,46 +75,26 @@ describe('HealthTrendsSettingsScreen', () => {
     expect(orderedRowKeys()).toHaveLength(HEALTH_TREND_KEYS.length);
   });
 
-  test('renders hidden trends below the divider', () => {
-    useAppPreferencesStore.setState({ hiddenHealthTrends: ['weight'] });
-
+  test('toggling a trend switch updates hiddenHealthTrends in the store', () => {
     renderScreen();
 
-    expect(orderedRowKeys()).toEqual(['steps', 'sleep', 'hydration', 'weight']);
-    expect(screen.getByTestId('health-trend-divider')).toBeTruthy();
-  });
+    const stepsSwitch = screen.getByTestId('health-trend-switch-steps');
+    expect(stepsSwitch.props.value).toBe(true);
 
-  test('dragging the last shown trend past the divider hides it', () => {
-    useAppPreferencesStore.setState({
-      healthTrendOrder: ['steps', 'weight', 'sleep', 'hydration'],
-      hiddenHealthTrends: ['weight', 'sleep', 'hydration'],
-    });
-
-    renderScreen();
-    // Steps is the only shown row, so moving it down crosses the divider.
-    moveRow('steps', 'increment');
-
+    // Toggle off
+    fireEvent(stepsSwitch, 'valueChange', false);
     expect(useAppPreferencesStore.getState().hiddenHealthTrends).toContain(
       'steps'
     );
-  });
 
-  test('dragging a hidden trend above the divider shows it again', () => {
-    useAppPreferencesStore.setState({
-      healthTrendOrder: ['steps', 'weight', 'sleep', 'hydration'],
-      hiddenHealthTrends: ['steps'],
-    });
-
-    renderScreen();
-    // Steps sits directly below the divider, so moving it up crosses back.
-    moveRow('steps', 'decrement');
-
+    // Toggle on
+    fireEvent(stepsSwitch, 'valueChange', true);
     expect(useAppPreferencesStore.getState().hiddenHealthTrends).not.toContain(
       'steps'
     );
   });
 
-  test('reordering above the divider does not change visibility', () => {
+  test('reordering rows updates healthTrendOrder', () => {
     renderScreen();
 
     moveRow('steps', 'increment');
@@ -126,7 +106,6 @@ describe('HealthTrendsSettingsScreen', () => {
       'sleep',
       'hydration',
     ]);
-    expect(state.hiddenHealthTrends).toEqual([]);
   });
 
   test('the decrement action on the first row is a no-op', () => {
@@ -137,23 +116,5 @@ describe('HealthTrendsSettingsScreen', () => {
     expect(useAppPreferencesStore.getState().healthTrendOrder).toEqual([
       ...HEALTH_TREND_KEYS,
     ]);
-  });
-
-  test('prompts when nothing is hidden yet', () => {
-    renderScreen();
-
-    expect(screen.getByTestId('health-trend-empty-hidden')).toBeTruthy();
-    expect(screen.queryByTestId('health-trend-empty-shown')).toBeNull();
-  });
-
-  test('prompts when every trend is hidden', () => {
-    useAppPreferencesStore.setState({
-      hiddenHealthTrends: [...HEALTH_TREND_KEYS],
-    });
-
-    renderScreen();
-
-    expect(screen.getByTestId('health-trend-empty-shown')).toBeTruthy();
-    expect(screen.queryByTestId('health-trend-empty-hidden')).toBeNull();
   });
 });

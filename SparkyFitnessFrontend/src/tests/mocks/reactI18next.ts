@@ -27,4 +27,7 @@ export const translateForTest = (
   );
 };
 
-export const useTranslation = () => ({ t: translateForTest });
+export const useTranslation = () => ({
+  t: translateForTest,
+  i18n: { language: 'en' },
+});

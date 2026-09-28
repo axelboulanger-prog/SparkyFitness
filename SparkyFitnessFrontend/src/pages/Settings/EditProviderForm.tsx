@@ -72,7 +72,8 @@ export const EditProviderForm = ({
                 provider_type: value as ExternalDataProvider['provider_type'],
                 app_id: '',
                 app_key: '',
-                base_url: '',
+                base_url:
+                  value === 'coros_mcp' ? 'https://mcpus.coros.com/mcp' : '',
                 garmin_connect_status: 'disconnected',
                 garmin_last_status_check: '',
                 garmin_token_expires: '',
@@ -885,6 +886,30 @@ export const EditProviderForm = ({
           </p>
         </>
       )}
+      {editData.provider_type === 'liftosaur' && (
+        <>
+          <div>
+            <Label>Liftosaur API Key</Label>
+            <Input
+              type="password"
+              value={editData.app_key || ''}
+              onChange={(e) =>
+                setEditData((prev) => ({
+                  ...prev,
+                  app_key: e.target.value,
+                }))
+              }
+              placeholder="Enter Liftosaur API Key (lftsk_...)"
+              autoComplete="off"
+            />
+          </div>
+          <p className="text-sm text-muted-foreground col-span-2">
+            Generate an API key in the Liftosaur app: Settings &#62; API Keys
+            (starts with <span className="font-mono">lftsk_</span>). A Liftosaur
+            Pro subscription is required to use the Liftosaur API.
+          </p>
+        </>
+      )}
       {(editData.provider_type === 'withings' ||
         editData.provider_type === 'garmin' ||
         editData.provider_type === 'fitbit' ||
@@ -892,7 +917,9 @@ export const EditProviderForm = ({
         editData.provider_type === 'googlehealth' ||
         editData.provider_type === 'strava' ||
         editData.provider_type === 'polar' ||
-        editData.provider_type === 'hevy') && (
+        editData.provider_type === 'coros_mcp' ||
+        editData.provider_type === 'hevy' ||
+        editData.provider_type === 'liftosaur') && (
         <div>
           <Label htmlFor="edit_sync_frequency">Sync Frequency</Label>
           <Select
@@ -974,6 +1001,71 @@ export const EditProviderForm = ({
               wger Project Website
             </a>
             .
+          </p>
+        </div>
+      )}
+
+      {editData.provider_type === 'coros_mcp' && (
+        <div className="col-span-2 space-y-4">
+          <div>
+            <Label htmlFor="edit_coros_region">
+              {t(
+                'settings.foodExerciseDataProviders.coros.regionLabel',
+                'COROS Region'
+              )}
+            </Label>
+            <Select
+              value={editData.base_url || 'https://mcpus.coros.com/mcp'}
+              onValueChange={(val) =>
+                setEditData((prev) => ({ ...prev, base_url: val }))
+              }
+            >
+              <SelectTrigger id="edit_coros_region" className="w-full">
+                <SelectValue placeholder="Select region" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="https://mcpus.coros.com/mcp">
+                  {t(
+                    'settings.foodExerciseDataProviders.coros.regionUs',
+                    'United States (mcpus.coros.com)'
+                  )}
+                </SelectItem>
+                <SelectItem value="https://mcpeu.coros.com/mcp">
+                  {t(
+                    'settings.foodExerciseDataProviders.coros.regionEu',
+                    'Europe (mcpeu.coros.com)'
+                  )}{' '}
+                  <span className="text-xs text-muted-foreground">
+                    (
+                    {t(
+                      'settings.foodExerciseDataProviders.coros.notTested',
+                      'not yet tested'
+                    )}
+                    )
+                  </span>
+                </SelectItem>
+                <SelectItem value="https://mcpcn.coros.com/mcp">
+                  {t(
+                    'settings.foodExerciseDataProviders.coros.regionCn',
+                    'Mainland China (mcpcn.coros.com)'
+                  )}{' '}
+                  <span className="text-xs text-muted-foreground">
+                    (
+                    {t(
+                      'settings.foodExerciseDataProviders.coros.notTested',
+                      'not yet tested'
+                    )}
+                    )
+                  </span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {t(
+              'settings.foodExerciseDataProviders.coros.infoText',
+              "No API keys needed. You'll sign in with your COROS account. Your SparkyFitness address must be https:// (or localhost) for COROS to accept the connection."
+            )}
           </p>
         </div>
       )}

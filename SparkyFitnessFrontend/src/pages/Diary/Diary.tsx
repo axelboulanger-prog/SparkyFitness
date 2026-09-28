@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { DailyHealthMetricsCard } from '@/components/Health/DailyHealthMetricsCard';
 import { useDailyHealthMetrics } from '@/hooks/useGenericHealth';
+import { selectDisplayableHealthMetrics } from '@/utils/dailyHealthMetrics';
 import EditFoodEntryDialog from './EditFoodEntryDialog';
 import FoodUnitSelector from '@/components/FoodUnitSelector';
 import CopyFoodEntryDialog from '@/pages/Diary/CopyFoodEntryDialog';
@@ -353,15 +354,14 @@ const Diary = () => {
   // card actually displays came back populated (no real wearable, FIT-only
   // import, etc.). Only show the widget when there's something real to show,
   // rather than an empty shell.
-  const todaysHealthMetrics = healthMetricsData?.[0];
-  const hasDisplayableHealthMetrics = Boolean(
-    todaysHealthMetrics &&
-    (todaysHealthMetrics.body_battery_highest != null ||
-      todaysHealthMetrics.avg_stress_level != null ||
-      todaysHealthMetrics.resting_heart_rate != null ||
-      todaysHealthMetrics.vo2_max != null ||
-      todaysHealthMetrics.training_readiness_score != null)
-  );
+  //
+  // daily_health_metrics holds one row per provider per day and the API orders
+  // only by entry_date, so for a multi-provider user the first row is arbitrary
+  // and is often an empty shell from a provider that synced something else that
+  // day. Pick the row that actually has data instead of index 0. The card is
+  // single-provider by design -- it badges metrics.source_provider -- so this
+  // selects one row rather than merging several, which would mislabel the badge.
+  const todaysHealthMetrics = selectDisplayableHealthMetrics(healthMetricsData);
 
   // Build the ordered widget registry: energy, nutrition, water, one card per
   // visible meal type, then exercise. Keys match buildWidgetKeys() so the saved
@@ -398,22 +398,17 @@ const Diary = () => {
       },
     ];
 
-    if (hasDisplayableHealthMetrics) {
-      list.push({
-        key: 'healthMetrics',
-        title: t(
-          'diary.wearableHealthSummary',
-          'Daily Wearable Health Summary'
-        ),
-        icon: HeartPulse,
-        render: () => (
-          <DailyHealthMetricsCard
-            metrics={todaysHealthMetrics}
-            isLoading={loadingHealthMetrics}
-          />
-        ),
-      });
-    }
+    list.push({
+      key: 'healthMetrics',
+      title: t('diary.wearableHealthSummary', 'Daily Wearable Health Summary'),
+      icon: HeartPulse,
+      render: () => (
+        <DailyHealthMetricsCard
+          metrics={todaysHealthMetrics}
+          isLoading={loadingHealthMetrics}
+        />
+      ),
+    });
 
     for (const mealTypeObj of visibleMealTypes) {
       list.push({
@@ -495,7 +490,6 @@ const Diary = () => {
     customNutrients,
     exercisesToLogFromPreset,
     openFoodSearchForMealType,
-    hasDisplayableHealthMetrics,
     todaysHealthMetrics,
     loadingHealthMetrics,
     t,

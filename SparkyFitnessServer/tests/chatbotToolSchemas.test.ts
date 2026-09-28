@@ -7,6 +7,10 @@ import {
   manageExerciseSchema,
 } from '../ai/tools/schemas/exercise.js';
 import {
+  manageWorkoutPlansInput,
+  manageWorkoutPlansSchema,
+} from '../ai/tools/schemas/workoutPlans.js';
+import {
   manageCheckinInput,
   manageCheckinSchema,
 } from '../ai/tools/schemas/checkin.js';
@@ -158,6 +162,12 @@ describe('published (flat) chatbot tool schemas', () => {
         'searchTerm',
         'muscleGroup',
         'equipment',
+        'alternative_mode',
+        'avoid_muscles',
+        'scope',
+        'difficulty',
+        'pain',
+        'pain_note',
         'limit',
         'offset',
         'category',
@@ -176,6 +186,10 @@ describe('published (flat) chatbot tool schemas', () => {
         'preset_id',
         'preset_name',
         'is_public',
+        'workout_format',
+        'time_cap_seconds',
+        'wod_score',
+        'location',
         'confirmed',
         'entry_id',
         'start_date',
@@ -192,10 +206,41 @@ describe('published (flat) chatbot tool schemas', () => {
         'update_exercise_entry',
         'delete_exercise_entry',
         'get_exercise_details',
+        'duplicate_exercise',
         'create_workout_preset',
         'update_workout_preset',
         'delete_workout_preset',
         'get_exercise_progress',
+        'suggest_alternatives',
+        'rate_workout',
+        'get_workout_coaching',
+      ],
+    },
+    {
+      name: 'manageWorkoutPlansInput',
+      schema: manageWorkoutPlansInput,
+      properties: [
+        'action',
+        'plan_id',
+        'confirmed',
+        'plan_name',
+        'description',
+        'schedule_type',
+        'entry_mode',
+        'is_active',
+        'start_date',
+        'end_date',
+        'date',
+        'sessions',
+        'assignments',
+      ],
+      actions: [
+        'list_workout_plans',
+        'get_workout_plan',
+        'get_active_workout_plan',
+        'create_workout_plan',
+        'update_workout_plan',
+        'delete_workout_plan',
       ],
     },
     {
@@ -648,5 +693,31 @@ describe('strict discriminated-union validation schemas', () => {
         end_date: 'June 11',
       }).success
     ).toBe(false);
+  });
+
+  it('manageWorkoutPlansSchema accepts create_workout_plan with sequential sessions', () => {
+    const result = manageWorkoutPlansSchema.safeParse({
+      action: 'create_workout_plan',
+      plan_name: 'Upper Lower Split',
+      schedule_type: 'sequential',
+      sessions: [
+        {
+          session_name: 'Upper Body',
+          exercise_name: 'Bench Press',
+          sets: [{ reps: 10, weight: 80 }],
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('manageWorkoutPlansSchema accepts update_workout_plan with numeric plan_id and confirmed', () => {
+    const result = manageWorkoutPlansSchema.safeParse({
+      action: 'update_workout_plan',
+      plan_id: 12,
+      confirmed: true,
+      plan_name: 'Updated Plan Name',
+    });
+    expect(result.success).toBe(true);
   });
 });

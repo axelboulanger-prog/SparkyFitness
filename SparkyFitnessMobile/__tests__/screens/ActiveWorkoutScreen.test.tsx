@@ -52,6 +52,10 @@ jest.mock('../../src/hooks/useSelectedExercise', () => ({
   useSelectedExercise: jest.fn(),
 }));
 
+jest.mock('../../src/hooks/useLiveCoachingSignals', () => ({
+  useLiveCoachingSignals: jest.fn(),
+}));
+
 jest.mock('../../src/hooks/useNavigationActionGuard', () => ({
   useNavigationActionGuard: jest.fn(() => ({
     runNavigationAction: jest.fn((action: () => void) => action()),
@@ -285,10 +289,22 @@ function makeSession(): PresetSessionResponse {
   };
 }
 
+// Real navigation stops reporting the screen focused once it has navigated
+// away, which is how the screen tells its own Finish/Discard apart from a
+// workout cleared elsewhere (e.g. ended on the watch).
+let screenFocused = true;
+beforeEach(() => {
+  screenFocused = true;
+});
 const navigation = {
-  goBack: jest.fn(),
+  goBack: jest.fn(() => {
+    screenFocused = false;
+  }),
   navigate: jest.fn(),
-  replace: jest.fn(),
+  replace: jest.fn(() => {
+    screenFocused = false;
+  }),
+  isFocused: jest.fn(() => screenFocused),
   canGoBack: jest.fn(() => true),
   addListener: jest.fn(() => jest.fn()),
 } as any;
@@ -1107,5 +1123,58 @@ describe('ActiveWorkoutScreen source preset server-config guard', () => {
     expect(getByTestId('card-ex-a').props.accessibilityLabel).toBe(
       'sourcePresetId:undefined'
     );
+  });
+});
+
+describe('ActiveWorkoutScreen session cleared from outside the screen', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    mockUseIsFocused.mockReturnValue(true);
+    __resetActiveWorkoutStoreForTests();
+    __resetAppPreferencesStoreForTests();
+    useActiveWorkoutStore.getState().startWorkout(makeSession());
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('leaves the screen when the workout is ended elsewhere (e.g. on the watch) while it is showing', () => {
+    renderScreen();
+    expect(navigation.goBack).not.toHaveBeenCalled();
+
+    act(() => {
+      useActiveWorkoutStore.getState().clearWorkout();
+    });
+
+    expect(navigation.goBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits until the screen is focused again when it was cleared while further down the stack', () => {
+    mockUseIsFocused.mockReturnValue(false);
+    screenFocused = false;
+    const { rerender } = renderScreen();
+
+    act(() => {
+      useActiveWorkoutStore.getState().clearWorkout();
+    });
+    expect(navigation.goBack).not.toHaveBeenCalled();
+
+    mockUseIsFocused.mockReturnValue(true);
+    screenFocused = true;
+    rerender(
+      <SafeAreaProvider initialMetrics={{ insets, frame }}>
+        <QueryClientProvider
+          client={
+            new QueryClient({ defaultOptions: { queries: { retry: false } } })
+          }
+        >
+          <ActiveWorkoutScreen navigation={navigation} route={route} />
+        </QueryClientProvider>
+      </SafeAreaProvider>
+    );
+
+    expect(navigation.goBack).toHaveBeenCalledTimes(1);
   });
 });

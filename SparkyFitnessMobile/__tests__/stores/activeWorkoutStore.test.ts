@@ -1158,6 +1158,54 @@ describe('activeWorkoutStore', () => {
         expect(set0.reps).toBe(5);
       });
 
+      it('adopts the ramped weight from the live-start preset config', () => {
+        useActiveWorkoutStore.getState().startWorkout(makeEmptySession(), {
+          createdByLiveStart: true,
+          plannedSetValues: [
+            [
+              { weight: 80, reps: 5 },
+              { weight: 80, reps: 5 },
+            ],
+            [{ weight: 120, reps: 3 }],
+          ],
+          exerciseConfigs: [{ ramp_increment: 5 }, {}],
+        });
+        expect(useActiveWorkoutStore.getState().exerciseConfigs).toEqual({
+          'ex-uuid-1': { ramp_increment: 5 },
+          'ex-uuid-2': {},
+        });
+        useActiveWorkoutStore.getState().capturePreviousSessionSets('ex-1', []);
+
+        useActiveWorkoutStore.getState().completeSet('102');
+
+        const set1 =
+          useActiveWorkoutStore.getState().session!.exercises[0].sets[1];
+        expect(set1.weight).toBe(85);
+      });
+
+      it('rounds an adopted ramp in the unit the live card synced', () => {
+        useActiveWorkoutStore.getState().setWeightUnit('lbs');
+        useActiveWorkoutStore.getState().startWorkout(makeEmptySession(), {
+          createdByLiveStart: true,
+          // 185 lb, +10 lb (4.54 kg as stored).
+          plannedSetValues: [
+            [
+              { weight: 83.91, reps: 5 },
+              { weight: 83.91, reps: 5 },
+            ],
+          ],
+          exerciseConfigs: [{ ramp_increment: 4.54 }],
+        });
+        useActiveWorkoutStore.getState().capturePreviousSessionSets('ex-1', []);
+
+        useActiveWorkoutStore.getState().completeSet('102');
+
+        const set1 =
+          useActiveWorkoutStore.getState().session!.exercises[0].sets[1];
+        expect(set1.weight! / 0.45359237).toBeCloseTo(195, 2);
+        useActiveWorkoutStore.getState().setWeightUnit('kg');
+      });
+
       it('completes with nothing to adopt when no source resolves', () => {
         useActiveWorkoutStore.getState().startWorkout(makeEmptySession());
 
@@ -2569,6 +2617,33 @@ describe('activeWorkoutStore', () => {
         expect(state.hasUnsavedChanges).toBe(true);
       });
 
+      it('forgets a declined adaptive suggestion for the replaced entry', () => {
+        useActiveWorkoutStore.setState({
+          declinedAdaptive: { 'ex-uuid-1': true, 'ex-uuid-2': true },
+        });
+        useActiveWorkoutStore
+          .getState()
+          .replaceExercise('ex-uuid-1', replacement);
+        expect(useActiveWorkoutStore.getState().declinedAdaptive).toEqual({
+          'ex-uuid-2': true,
+        });
+      });
+
+      it("drops the replaced exercise's preset progression/ramp settings", () => {
+        useActiveWorkoutStore.setState({
+          exerciseConfigs: {
+            'ex-uuid-1': { ramp_increment: 5 },
+            'ex-uuid-2': { ramp_increment: 2.5 },
+          },
+        });
+        useActiveWorkoutStore
+          .getState()
+          .replaceExercise('ex-uuid-1', replacement);
+        expect(useActiveWorkoutStore.getState().exerciseConfigs).toEqual({
+          'ex-uuid-2': { ramp_increment: 2.5 },
+        });
+      });
+
       it('prunes completions for the replaced sets and repoints the cursor', async () => {
         useActiveWorkoutStore.getState().completeActiveSet(); // 101 done, cursor 102
         await flushPromises();
@@ -3922,6 +3997,129 @@ describe('activeWorkoutStore', () => {
       const st = useActiveWorkoutStore.getState();
       expect(st.prSetIds).toEqual({});
       expect(st.prBaseline).toEqual({});
+    });
+  });
+
+  describe('drop sets, location, set timer, rest expiry (#1692)', () => {
+    beforeEach(() => {
+      useActiveWorkoutStore.getState().startWorkout(makeSession());
+    });
+
+    it('appends drop sets typed "drop" with unique temp ids across the session', () => {
+      // A pending temp set in another exercise must not collide.
+      useActiveWorkoutStore.getState().addSetToExercise('ex-uuid-2');
+      useActiveWorkoutStore
+        .getState()
+        .addDropSetsToExercise('ex-uuid-1', 70, 'kg');
+
+      const session = useActiveWorkoutStore.getState().session!;
+      const drops = session.exercises[0].sets.slice(2);
+      expect(drops.map((d) => d.set_type)).toEqual(['drop', 'drop', 'drop']);
+      expect(drops.map((d) => d.weight)).toEqual([56, 44.75, 35.75]);
+      expect(drops.every((d) => d.rir == null && d.duration == null)).toBe(
+        true
+      );
+
+      const allIds = session.exercises.flatMap((e) => e.sets.map((x) => x.id));
+      expect(new Set(allIds).size).toBe(allIds.length);
+      expect(drops.every((d) => d.id < 0)).toBe(true);
+    });
+
+    it('marks the session dirty when the location changes, so autosave runs', () => {
+      useActiveWorkoutStore.setState({ hasUnsavedChanges: false });
+      useActiveWorkoutStore.getState().setSessionLocation('Home Gym');
+      const state = useActiveWorkoutStore.getState();
+      expect(state.session!.location).toBe('Home Gym');
+      expect(state.hasUnsavedChanges).toBe(true);
+    });
+
+    it('times a hold set in the store and writes whole seconds on stop', () => {
+      const store = useActiveWorkoutStore.getState();
+      store.startSetTimer('101');
+      expect(useActiveWorkoutStore.getState().setTimerStartedAt['101']).toBe(
+        FIXED_NOW
+      );
+
+      jest.setSystemTime(new Date(FIXED_NOW + 45_400));
+      expect(useActiveWorkoutStore.getState().stopSetTimer('101')).toBe(45);
+
+      const state = useActiveWorkoutStore.getState();
+      expect(state.setTimerStartedAt['101']).toBeUndefined();
+      expect(state.session!.exercises[0].sets[0].duration).toBe(45);
+      expect(useActiveWorkoutStore.getState().stopSetTimer('101')).toBeNull();
+    });
+
+    it('stamps restExpiredAt only when a rest runs out, not on Skip', async () => {
+      useActiveWorkoutStore.getState().completeActiveSet(); // rest 60s
+      useActiveWorkoutStore.getState().dismissRest();
+      expect(useActiveWorkoutStore.getState().restExpiredAt).toBeNull();
+
+      useActiveWorkoutStore.getState().completeActiveSet(); // next rest
+      jest.setSystemTime(new Date(FIXED_NOW + 61_000));
+      useActiveWorkoutStore.getState().markRestReady();
+      expect(useActiveWorkoutStore.getState().restExpiredAt).toBe(
+        FIXED_NOW + 61_000
+      );
+      await flushPromises();
+    });
+  });
+
+  describe('adaptive coaching state (#1560)', () => {
+    const signal = {
+      exercise_id: 'ex-1',
+      last_performed_date: '2026-03-18',
+      days_since_last_performed: 2,
+      last_difficulty: 'too_hard' as const,
+      last_pain: null,
+      too_easy_streak: 0,
+      too_hard_streak: 1,
+      pain_streak: 0,
+      avg_rpe: null,
+      avg_rir: null,
+      sessions_in_variation_window: 2,
+    };
+
+    it('captures signals once per exercise, recording "no history" as null', () => {
+      useActiveWorkoutStore.getState().startWorkout(makeSession());
+      useActiveWorkoutStore
+        .getState()
+        .captureCoachingSignals(['ex-1', 'ex-2'], [signal]);
+      expect(useActiveWorkoutStore.getState().coachingSignals).toEqual({
+        'ex-1': signal,
+        'ex-2': null,
+      });
+      // A later answer never shifts a captured suggestion mid-workout.
+      useActiveWorkoutStore
+        .getState()
+        .captureCoachingSignals(['ex-1'], [{ ...signal, too_hard_streak: 3 }]);
+      expect(useActiveWorkoutStore.getState().coachingSignals['ex-1']).toBe(
+        signal
+      );
+    });
+
+    it('ignores signals outside a live workout and resets on a new one', () => {
+      useActiveWorkoutStore
+        .getState()
+        .captureCoachingSignals(['ex-1'], [signal]);
+      expect(useActiveWorkoutStore.getState().coachingSignals).toEqual({});
+      useActiveWorkoutStore.getState().startWorkout(makeSession());
+      useActiveWorkoutStore
+        .getState()
+        .captureCoachingSignals(['ex-1'], [signal]);
+      useActiveWorkoutStore.getState().setAdaptiveDeclined('ex-uuid-1', true);
+      useActiveWorkoutStore.getState().startWorkout(makeSession());
+      expect(useActiveWorkoutStore.getState().coachingSignals).toEqual({});
+      expect(useActiveWorkoutStore.getState().declinedAdaptive).toEqual({});
+    });
+
+    it('declines and restores an adjustment per entry', () => {
+      useActiveWorkoutStore.getState().startWorkout(makeSession());
+      useActiveWorkoutStore.getState().setAdaptiveDeclined('ex-uuid-1', true);
+      expect(useActiveWorkoutStore.getState().declinedAdaptive).toEqual({
+        'ex-uuid-1': true,
+      });
+      useActiveWorkoutStore.getState().setAdaptiveDeclined('ex-uuid-1', false);
+      expect(useActiveWorkoutStore.getState().declinedAdaptive).toEqual({});
     });
   });
 });

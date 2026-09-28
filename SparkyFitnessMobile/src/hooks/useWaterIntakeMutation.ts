@@ -11,6 +11,7 @@ import { getServingVolume } from '../utils/unitConversions';
 import type { DailySummaryRawData } from './useDailySummary';
 import type { WaterContainer } from '../types/measurements';
 import {
+  caffeineActiveQueryKey,
   dailySummaryQueryKey,
   waterContainersQueryKey,
   waterIntakeLogQueryKey,
@@ -193,6 +194,8 @@ export function useWaterIntakeMutation({
       queryClient.invalidateQueries({ queryKey: dailySummaryQueryKey(date) });
       // The itemized log backs hydration reminders and the watch's log view.
       queryClient.invalidateQueries({ queryKey: waterIntakeLogQueryKey(date) });
+      // A linked container logs a drink that can move the day's caffeine curve.
+      queryClient.invalidateQueries({ queryKey: caffeineActiveQueryKey(date) });
     },
   });
 
@@ -245,6 +248,9 @@ export function useWaterIntakeMutation({
       });
       void queryClient.invalidateQueries({
         queryKey: waterIntakeLogQueryKey(date),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: caffeineActiveQueryKey(date),
       });
     },
     onError: () => {

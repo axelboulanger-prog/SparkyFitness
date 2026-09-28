@@ -96,7 +96,12 @@ jest.mock('../../src/stores/activeWorkoutStore', () => {
   const storeState = {
     capturePrBaseline,
     capturePreviousSessionSets,
+    setWeightUnit: jest.fn(),
     plannedSetValues: {},
+    exerciseConfigs: {},
+    workoutFormat: 'standard',
+    coachingSignals: {},
+    declinedAdaptive: {},
   };
   return {
     __esModule: true,
@@ -562,6 +567,33 @@ describe('ActiveWorkoutExerciseCard', () => {
       expect(live.queryByText('150 kcal')).toBeNull();
     });
 
+    it('shows heart rate with the max in parentheses, view mode only', () => {
+      const exercise = makeExercise({
+        avg_heart_rate: 142,
+        max_heart_rate: 168,
+      });
+      const view = renderCard(true, { mode: 'view', exercise });
+      expect(view.getByText('142 (168) bpm')).toBeTruthy();
+
+      // Live mode has no HR chip: the watch reports it after the fact, so
+      // mid-workout there is nothing to show.
+      const live = renderCard(true, { mode: 'live', exercise });
+      expect(live.queryByText('142 (168) bpm')).toBeNull();
+    });
+
+    it('shows a lone figure when max matches the average', () => {
+      const view = renderCard(true, {
+        mode: 'view',
+        exercise: makeExercise({ avg_heart_rate: 140, max_heart_rate: 140 }),
+      });
+      expect(view.getByText('140 bpm')).toBeTruthy();
+    });
+
+    it('shows no heart rate chip when the entry carries none', () => {
+      const view = renderCard(true, { mode: 'view' });
+      expect(view.queryByText(/bpm/)).toBeNull();
+    });
+
     it('skips the exercise stats fetch', () => {
       renderCard(true, { mode: 'view' });
       expect(mockUseExerciseStats).toHaveBeenCalledWith(
@@ -649,6 +681,67 @@ describe('ActiveWorkoutExerciseCard', () => {
       );
       expect(getByTestId('set-row-102').props.accessibilityHint).toBe(
         'next:none entry:ex-uuid-1'
+      );
+    });
+
+    it('hides the progression editor on forms that cannot save it', () => {
+      const { queryByLabelText } = renderCard(true, { mode: 'edit' });
+      expect(queryByLabelText('Toggle progression settings')).toBeNull();
+    });
+
+    it('commits the per-set ramp in kg, signed by direction', () => {
+      const onUpdateProgression = jest.fn();
+      const { getByLabelText, getByText } = renderCard(true, {
+        mode: 'edit',
+        weightUnit: 'lbs',
+        onUpdateProgression,
+      });
+      fireEvent.press(getByLabelText('Toggle progression settings'));
+      fireEvent.changeText(getByLabelText('Weight added per set (lbs)'), '10');
+      expect(onUpdateProgression).toHaveBeenLastCalledWith('ex-uuid-1', {
+        rampIncrement: expect.closeTo(4.5359, 3),
+      });
+
+      fireEvent.press(getByText('Down'));
+      expect(onUpdateProgression).toHaveBeenLastCalledWith('ex-uuid-1', {
+        rampIncrement: expect.closeTo(-4.5359, 3),
+      });
+
+      fireEvent.changeText(getByLabelText('Weight added per set (lbs)'), '');
+      expect(onUpdateProgression).toHaveBeenLastCalledWith('ex-uuid-1', {
+        rampIncrement: null,
+      });
+    });
+
+    it('re-stores the typed increment when the mode changes its meaning', () => {
+      const onUpdateProgression = jest.fn();
+      const { getByLabelText, getByText, getByPlaceholderText } = renderCard(
+        true,
+        { mode: 'edit', weightUnit: 'lbs', onUpdateProgression }
+      );
+      fireEvent.press(getByLabelText('Toggle progression settings'));
+      // Rep Goal: 5 lb stores as kg.
+      fireEvent.changeText(getByPlaceholderText('5'), '5');
+      expect(onUpdateProgression).toHaveBeenLastCalledWith('ex-uuid-1', {
+        incrementValue: expect.closeTo(2.268, 3),
+      });
+      // Step-Load counts reps: the same "5" is now 5 reps, not 2.27.
+      fireEvent.press(getByText('Step-Load'));
+      expect(onUpdateProgression).toHaveBeenLastCalledWith('ex-uuid-1', {
+        incrementValue: 5,
+      });
+    });
+
+    it("shows a stored kg ramp in the lifter's unit", () => {
+      const { getByLabelText } = renderCard(true, {
+        mode: 'edit',
+        weightUnit: 'lbs',
+        onUpdateProgression: jest.fn(),
+        exercise: { ...makeExercise(), ramp_increment: 4.54 },
+      });
+      fireEvent.press(getByLabelText('Toggle progression settings'));
+      expect(getByLabelText('Weight added per set (lbs)').props.value).toBe(
+        '10'
       );
     });
 

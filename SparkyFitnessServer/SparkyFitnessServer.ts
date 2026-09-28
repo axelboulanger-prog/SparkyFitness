@@ -1,4 +1,5 @@
 import path from 'path';
+import { emailLoginGuard } from './middleware/emailLoginGuard.js';
 
 import fs from 'fs';
 import type { ServerResponse } from 'http';
@@ -34,6 +35,7 @@ import v2FoodRoutes from './routes/v2/foodRoutes.js';
 import v2ExerciseEntryRoutes from './routes/v2/exerciseEntryRoutes.js';
 // @ts-expect-error TS1192
 import v2ExerciseRoutes from './routes/v2/exerciseRoutes.js';
+import workoutCoachingRoutesV2 from './routes/v2/workoutCoachingRoutes.js';
 import mealRoutes from './routes/mealRoutes.js';
 import foodEntryRoutes from './routes/foodEntryRoutes.js';
 import foodEntryMealRoutes from './routes/foodEntryMealRoutes.js';
@@ -69,8 +71,10 @@ import fitbitRoutes from './routes/fitbitRoutes.js';
 import ouraRoutes from './routes/ouraRoutes.js';
 import googleHealthRoutes from './routes/googleHealthRoutes.js';
 import polarRoutes from './routes/polarRoutes.js';
+import corosRoutes from './routes/corosRoutes.js';
 import stravaRoutes from './routes/stravaRoutes.js';
 import hevyRoutes from './routes/hevyRoutes.js';
+import liftosaurRoutes from './routes/liftosaurRoutes.js';
 import moodRoutes from './routes/moodRoutes.js';
 import fastingRoutes from './routes/fastingRoutes.js';
 import adaptiveTdeeRoutes from './routes/adaptiveTdeeRoutes.js';
@@ -96,15 +100,7 @@ import reviewRoutes from './routes/reviewRoutes.js';
 import cron from 'node-cron';
 import { scheduleBackupsOnStartup } from './services/backupScheduler.js';
 import { scheduleOpenFoodFactsAutoSyncOnStartup } from './services/openFoodFactsAutoSyncScheduler.js';
-import externalProviderRepository from './models/externalProviderRepository.js';
-import garminService from './services/garminService.js';
-import { getGarminSyncPhaseErrors } from './services/garminSyncResult.js';
-import fitbitService from './services/fitbitService.js';
-import ouraService from './services/ouraService.js';
-import googleHealthService from './services/googleHealthService.js';
-import polarService from './services/polarService.js';
-import stravaService from './services/stravaService.js';
-import hevyService from './integrations/hevy/hevyService.js';
+import { startProviderSyncSchedulers } from './services/providerSyncScheduler.js';
 // @ts-expect-error TS1192
 import dailySummaryRoutes from './routes/dailySummaryRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
@@ -127,7 +123,6 @@ import workoutPresetRoutes from './routes/workoutPresetRoutes.js';
 import workoutPlanTemplateRoutes from './routes/workoutPlanTemplateRoutes.js';
 import { cleanupSessions } from './auth.js';
 import { deleteExpiredTickets } from './services/passkeyTicketService.js';
-import withingsServiceCentral from './services/withingsService.js';
 import { upsertEnvOidcProvider } from './utils/oidcEnvConfig.js';
 import userRepository from './models/userRepository.js';
 import genericHealthRoutes from './routes/genericHealthRoutes.js';
@@ -271,6 +266,7 @@ const mountBetterAuth = () => {
     throw error; // Propagate to block startup if auth fails
   }
 };
+app.use(emailLoginGuard);
 // Catch ALL requests starting with /api/auth early.
 app.use(async (req, res, next) => {
   if (req.originalUrl.startsWith('/api/auth') && betterAuthHandlerInstance) {
@@ -282,22 +278,6 @@ app.use(async (req, res, next) => {
       req.path.startsWith('/api/auth/web-login');
     if (isDiscovery) {
       return next();
-    }
-
-    // In demo mode the credential backend stays loaded so the one-click demo
-    // login (an in-process auth.api.signInEmail call) keeps working, so the
-    // public password routes have to be closed here instead. The body matches
-    // Better Auth's own EMAIL_PASSWORD_DISABLED response byte for byte, so a
-    // client cannot tell which layer refused it.
-    if (
-      process.env.SPARKY_FITNESS_DISABLE_EMAIL_LOGIN === 'true' &&
-      (req.path.startsWith('/api/auth/sign-in/email') ||
-        req.path.startsWith('/api/auth/sign-up/email'))
-    ) {
-      return res.status(400).json({
-        message: 'Email and password is not enabled',
-        code: 'EMAIL_PASSWORD_DISABLED',
-      });
     }
 
     if (isDemoMode()) {
@@ -635,9 +615,8 @@ app.get(
     }
   }
 );
-// Computed once at startup — these are static for the lifetime of the process
-const isPublicApiDocsEnabled =
-  process.env.SPARKY_FITNESS_PUBLIC_API_DOCS === 'true';
+import { isPublicApiDocsAllowed } from './models/globalSettingsRepository.js';
+
 const publicRoutes = [
   '/api/auth/settings',
   '/api/auth/mfa-factors',
@@ -650,12 +629,17 @@ const publicRoutes = [
   '/uploads',
   '/api/ping',
 ];
-if (isPublicApiDocsEnabled) {
-  publicRoutes.push('/api/api-docs');
-}
 
 // Apply authentication middleware to all protected routes
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
+  if (req.path === '/api/api-docs' || req.path.startsWith('/api/api-docs/')) {
+    const isPublicDocs =
+      (await isPublicApiDocsAllowed()) ||
+      process.env.SPARKY_FITNESS_PUBLIC_API_DOCS === 'true';
+    if (isPublicDocs) {
+      return next();
+    }
+  }
   const isPublic = publicRoutes.some((route) => {
     // Exact match or subpath match with trailing slash to prevent partial matches
     // e.g. "/api/health" matches "/api/health" and "/api/health/" but NOT "/api/health-data"
@@ -686,6 +670,7 @@ app.use('/api/favorites', favoritesRoutes);
 app.use('/api/v2/foods', v2FoodRoutes);
 app.use('/api/v2/exercise-entries', v2ExerciseEntryRoutes);
 app.use('/api/v2/exercises', v2ExerciseRoutes);
+app.use('/api/v2/workout-coaching', workoutCoachingRoutesV2);
 app.use('/api/food-entries', foodEntryRoutes);
 app.use('/api/food-entry-meals', foodEntryMealRoutes);
 app.use('/api/meals', mealRoutes);
@@ -732,8 +717,10 @@ app.use('/api/integrations/fitbit', fitbitRoutes);
 app.use('/api/integrations/oura', ouraRoutes);
 app.use('/api/integrations/googlehealth', googleHealthRoutes);
 app.use('/api/integrations/polar', polarRoutes);
+app.use('/api/integrations/coros', corosRoutes);
 app.use('/api/integrations/strava', stravaRoutes);
 app.use('/api/integrations/hevy', hevyRoutes);
+app.use('/api/integrations/liftosaur', liftosaurRoutes);
 app.use('/api/mood', moodRoutes);
 app.use('/api/fasting', fastingRoutes);
 app.use('/api/admin', adminRoutes);
@@ -789,241 +776,6 @@ const scheduleSessionCleanup = async () => {
     }
   });
 };
-// Withings sync
-const scheduleWithingsSyncs = async () => {
-  cron.schedule('0 * * * *', async () => {
-    try {
-      const withingsProviders =
-        await externalProviderRepository.getProvidersByType('withings');
-      for (const provider of withingsProviders) {
-        if (provider.is_active && provider.sync_frequency !== 'manual') {
-          try {
-            await withingsServiceCentral.syncWithingsData(
-              provider.user_id,
-              'scheduled'
-            );
-            await externalProviderRepository.updateProviderLastSync(
-              provider.id,
-              new Date()
-            );
-          } catch (error) {
-            console.error(
-              `[CRON] Withings sync failed for user ${provider.user_id}:`,
-              error
-            );
-          }
-        }
-      }
-    } catch (error) {
-      console.error('[CRON] scheduleWithingsSyncs task failed:', error);
-    }
-  });
-};
-// Garmin sync
-const scheduleGarminSyncs = async () => {
-  cron.schedule('0 * * * *', async () => {
-    try {
-      const providers =
-        await externalProviderRepository.getProvidersByType('garmin');
-      for (const provider of providers) {
-        if (provider.is_active && provider.sync_frequency !== 'manual') {
-          try {
-            const result = await garminService.syncGarminData(
-              provider.user_id,
-              'scheduled'
-            );
-            const failedPhases = getGarminSyncPhaseErrors(result);
-            if (failedPhases.length === 0) {
-              await externalProviderRepository.updateProviderLastSync(
-                provider.id,
-                new Date()
-              );
-            } else {
-              console.warn(
-                `[CRON] Garmin sync completed with failed phases for user ${provider.user_id}; last_sync_at not updated: ${failedPhases.join(', ')}`
-              );
-            }
-          } catch (error) {
-            console.error(
-              `[CRON] Garmin sync failed for user ${provider.user_id}:`,
-              error
-            );
-          }
-        }
-      }
-    } catch (error) {
-      console.error('[CRON] scheduleGarminSyncs task failed:', error);
-    }
-  });
-};
-// Fitbit sync
-const scheduleFitbitSyncs = async () => {
-  cron.schedule('0 * * * *', async () => {
-    try {
-      const fitbitProviders =
-        await externalProviderRepository.getProvidersByType('fitbit');
-      for (const provider of fitbitProviders) {
-        if (provider.is_active && provider.sync_frequency !== 'manual') {
-          try {
-            await fitbitService.syncFitbitData(provider.user_id, 'scheduled');
-            await externalProviderRepository.updateProviderLastSync(
-              provider.id,
-              new Date()
-            );
-          } catch (error) {
-            console.error(
-              `[CRON] Fitbit sync failed for user ${provider.user_id}:`,
-              error
-            );
-          }
-        }
-      }
-    } catch (error) {
-      console.error('[CRON] scheduleFitbitSyncs task failed:', error);
-    }
-  });
-};
-// Oura sync
-const scheduleOuraSyncs = async () => {
-  cron.schedule('0 * * * *', async () => {
-    try {
-      const ouraProviders =
-        await externalProviderRepository.getProvidersByType('oura');
-      for (const provider of ouraProviders) {
-        if (provider.is_active && provider.sync_frequency !== 'manual') {
-          try {
-            await ouraService.syncOuraData(provider.user_id, 'scheduled');
-            await externalProviderRepository.updateProviderLastSync(
-              provider.id,
-              new Date()
-            );
-          } catch (error) {
-            console.error(
-              `[CRON] Oura sync failed for user ${provider.user_id}:`,
-              error
-            );
-          }
-        }
-      }
-    } catch (error) {
-      console.error('[CRON] scheduleOuraSyncs task failed:', error);
-    }
-  });
-};
-// Strava sync
-const scheduleStravaSyncs = async () => {
-  cron.schedule('0 * * * *', async () => {
-    try {
-      const stravaProviders =
-        await externalProviderRepository.getProvidersByType('strava');
-      for (const provider of stravaProviders) {
-        if (provider.is_active && provider.sync_frequency !== 'manual') {
-          try {
-            await stravaService.syncStravaData(provider.user_id, 'scheduled');
-            await externalProviderRepository.updateProviderLastSync(
-              provider.id,
-              new Date()
-            );
-          } catch (error) {
-            console.error(
-              `[CRON] Strava sync failed for user ${provider.user_id}:`,
-              error
-            );
-          }
-        }
-      }
-    } catch (error) {
-      console.error('[CRON] scheduleStravaSyncs task failed:', error);
-    }
-  });
-};
-// Polar sync
-const schedulePolarSyncs = async () => {
-  cron.schedule('0 * * * *', async () => {
-    try {
-      const polarProviders =
-        await externalProviderRepository.getProvidersByType('polar');
-      for (const provider of polarProviders) {
-        if (provider.is_active && provider.sync_frequency !== 'manual') {
-          try {
-            await polarService.syncPolarData(
-              provider.user_id,
-              'scheduled',
-              provider.id
-            );
-            await externalProviderRepository.updateProviderLastSync(
-              provider.id,
-              new Date()
-            );
-          } catch (error) {
-            console.error(
-              `[CRON] Polar sync failed for user ${provider.user_id}:`,
-              error
-            );
-          }
-        }
-      }
-    } catch (error) {
-      console.error('[CRON] schedulePolarSyncs task failed:', error);
-    }
-  });
-};
-const scheduleGoogleHealthSyncs = async () => {
-  cron.schedule('0 * * * *', async () => {
-    try {
-      const providers =
-        await externalProviderRepository.getProvidersByType('googlehealth');
-      for (const provider of providers) {
-        if (provider.is_active && provider.sync_frequency !== 'manual') {
-          try {
-            await googleHealthService.syncGoogleHealthData(
-              provider.user_id,
-              'scheduled'
-            );
-            await externalProviderRepository.updateProviderLastSync(
-              provider.id,
-              new Date()
-            );
-          } catch (error) {
-            console.error(
-              `[CRON] Google Health sync failed for user ${provider.user_id}:`,
-              error
-            );
-          }
-        }
-      }
-    } catch (error) {
-      console.error('[CRON] scheduleGoogleHealthSyncs task failed:', error);
-    }
-  });
-};
-const scheduleHevySyncs = async () => {
-  cron.schedule('0 * * * *', async () => {
-    try {
-      const hevyProviders =
-        await externalProviderRepository.getProvidersByType('hevy');
-      for (const provider of hevyProviders) {
-        if (provider.is_active && provider.sync_frequency !== 'manual') {
-          try {
-            await hevyService.syncHevyData(
-              provider.user_id,
-              provider.user_id,
-              false,
-              provider.id
-            );
-          } catch (error) {
-            console.error(
-              `[CRON] Hevy sync failed for user ${provider.user_id}:`,
-              error
-            );
-          }
-        }
-      }
-    } catch (error) {
-      console.error('[CRON] scheduleHevySyncs task failed:', error);
-    }
-  });
-};
 // Migrations and RLS policies are applied by index.ts before this module is
 // imported, so that Better Auth's eager schema validation (run at auth.ts
 // module scope) sees the migrated schema. Do not move them back in here.
@@ -1044,14 +796,7 @@ const scheduleHevySyncs = async () => {
   scheduleBackupsOnStartup();
   await scheduleOpenFoodFactsAutoSyncOnStartup();
   scheduleSessionCleanup();
-  scheduleWithingsSyncs();
-  scheduleGarminSyncs();
-  scheduleFitbitSyncs();
-  scheduleOuraSyncs();
-  schedulePolarSyncs();
-  scheduleStravaSyncs();
-  scheduleGoogleHealthSyncs();
-  scheduleHevySyncs();
+  startProviderSyncSchedulers();
   if (process.env.SPARKY_FITNESS_ADMIN_EMAIL) {
     // A demo account promoted to admin would hand every anonymous visitor the
     // admin panel. Refuse the promotion rather than start up compromised.

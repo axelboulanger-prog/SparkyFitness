@@ -100,6 +100,9 @@ const GoogleHealthCallback = lazyWithChunkRecovery(
 const PolarCallback = lazyWithChunkRecovery(
   () => import('@/pages/Integrations/PolarCallback')
 );
+const CorosCallback = lazyWithChunkRecovery(
+  () => import('@/pages/Integrations/CorosCallback')
+);
 const StravaCallback = lazyWithChunkRecovery(
   () => import('@/pages/Integrations/StravaCallback')
 );
@@ -340,6 +343,16 @@ const router = createBrowserRouter([
       {
         path: '/polar/callback',
         Component: PolarCallback,
+        ErrorBoundary: RootErrorBoundary,
+      },
+      {
+        path: '/coros/callback',
+        Component: CorosCallback,
+        ErrorBoundary: RootErrorBoundary,
+      },
+      {
+        path: '/coros-mcp/callback',
+        Component: CorosCallback,
         ErrorBoundary: RootErrorBoundary,
       },
       {

@@ -266,6 +266,7 @@ export const extractTelemetryActivityEntries = (
     'garmin',
     'garmin_fit',
     'strava',
+    'coros_mcp',
     'healthkit',
     'health connect',
   ]);

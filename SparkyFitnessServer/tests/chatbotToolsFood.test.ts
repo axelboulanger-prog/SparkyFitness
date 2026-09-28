@@ -5048,11 +5048,11 @@ describe('sparky_get_food_diary', () => {
     // Actionable ids kept.
     expect(entry.id).toBe(ENTRY_ID);
     expect(entry.food_id).toBe(FOOD_ID);
-    // Populated nutrients kept.
+    // Populated nutrients kept and scaled to consumed quantity (2 servings * 155 kcal / 13g protein).
     expect(entry).toMatchObject({
       food_name: 'Eggs',
-      calories: 155,
-      protein: 13,
+      calories: 310,
+      protein: 26,
     });
     // Nulls, empty objects, and non-actionable internal surrogate keys dropped.
     for (const dropped of [
@@ -5089,6 +5089,57 @@ describe('sparky_get_food_diary', () => {
       expect(meal).not.toHaveProperty(dropped);
     }
     expect(meal.meal_type_id).toBe('99999999-9999-4999-8999-999999999999');
+  });
+
+  it('scales nutrients according to quantity and serving size (issue #2614)', async () => {
+    vi.mocked(foodEntryService.getFoodEntriesByDateRange).mockResolvedValue([
+      {
+        id: ENTRY_ID,
+        food_id: FOOD_ID,
+        food_name: 'Napolitanke hazelnut',
+        brand_name: 'Napolitanke',
+        quantity: 100,
+        unit: 'g',
+        serving_size: 32,
+        serving_unit: 'g',
+        calories: 170,
+        protein: 2,
+        carbs: 20,
+        fat: 9,
+        saturated_fat: 4.5,
+        sodium: 40,
+        potassium: 40,
+        sugars: 12,
+        entry_date: '2026-09-27',
+        meal_type: 'Snacks',
+        meal_type_id: 'cb3fcdd0-ebcf-4626-bce3-c6ec36072041',
+      },
+    ]);
+    vi.mocked(
+      foodEntryMealRepository.getFoodEntryMealsByDateRange
+    ).mockResolvedValue([]);
+
+    const result = await tools.sparky_get_food_diary.execute!(
+      { date: '2026-09-27' },
+      opts
+    );
+    const parsed = JSON.parse(result as string);
+    const entry = parsed.food_entries[0];
+
+    // 100g consumed against 32g reference serving -> multiplier = 3.125
+    expect(entry).toMatchObject({
+      food_name: 'Napolitanke hazelnut',
+      quantity: 100,
+      unit: 'g',
+      calories: 531.25,
+      protein: 6.25,
+      carbs: 62.5,
+      fat: 28.125,
+      saturated_fat: 14.063,
+      sodium: 125,
+      potassium: 125,
+      sugars: 37.5,
+    });
   });
 });
 

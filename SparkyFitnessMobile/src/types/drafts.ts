@@ -13,6 +13,7 @@ export interface WorkoutDraftSet {
   setType?: DraftSetType;
   notes?: string | null;
   rpe?: number | null;
+  rir?: number | null;
   completedAt?: string | null;
   isPr?: boolean;
 }
@@ -22,12 +23,13 @@ export interface WorkoutSetMetaPatch {
   restTime?: number | null;
   notes?: string | null;
   rpe?: number | null;
+  rir?: number | null;
   completedAt?: string | null;
 }
 
 export interface WorkoutDraftExercise {
   clientId: string;
-  /** Populated only when the exercise row originated from an existing server session. */
+  /** Server entry uuid. Existing rows keep theirs; new ones are minted in the form. */
   serverId?: string;
   /** Null when editing a session whose library exercise has since been deleted. */
   exerciseId: string | null;
@@ -59,6 +61,8 @@ export interface WorkoutDraftExercise {
   incrementType?: 'weight' | 'reps' | null;
   incrementValue?: number | null;
   equipmentBrand?: string | null;
+  /** Within-session per-set ramp, kg (negative ramps down). Null = off. */
+  rampIncrement?: number | null;
 }
 
 export interface WorkoutDraft {

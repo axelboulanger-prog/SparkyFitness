@@ -441,6 +441,54 @@ describe('WorkoutCompleteScreen', () => {
     expect(queryByLabelText('Calculating')).toBeNull();
   });
 
+  it('shows heart rate once the watch telemetry has landed', async () => {
+    // The tiles are absent on open: telemetry is posted after the workout is
+    // saved, so the snapshot this screen mounts with cannot carry it. The
+    // flush invalidates every workoutSession query, which is what brings the
+    // refetch below in on a real finish.
+    let resolve: (value: PresetSessionResponse) => void;
+    (getWorkout as jest.Mock).mockImplementation(
+      () => new Promise((res) => (resolve = res))
+    );
+    const { queryByText, findByText } = renderScreen();
+    expect(queryByText('Avg HR')).toBeNull();
+
+    const refreshed = makeSession();
+    refreshed.exercises = refreshed.exercises.map((e) => ({
+      ...e,
+      avg_heart_rate: 132,
+      max_heart_rate: 168,
+    }));
+    resolve!(refreshed);
+
+    expect(await findByText('Avg HR')).toBeTruthy();
+    expect(await findByText('Max HR')).toBeTruthy();
+    // Regex, like the calories assertions above: StatValue splits the figure
+    // and its unit across nodes.
+    expect(await findByText(/132/)).toBeTruthy();
+    expect(await findByText(/168/)).toBeTruthy();
+  });
+
+  it('omits the Max HR tile when only an average was recorded', async () => {
+    const refreshed = makeSession();
+    refreshed.exercises = refreshed.exercises.map((e) => ({
+      ...e,
+      avg_heart_rate: 132,
+    }));
+    (getWorkout as jest.Mock).mockResolvedValue(refreshed);
+    const { findByText, queryByText } = renderScreen();
+    expect(await findByText('Avg HR')).toBeTruthy();
+    expect(queryByText('Max HR')).toBeNull();
+  });
+
+  it('shows no heart rate tiles for a workout with no watch behind it', async () => {
+    (getWorkout as jest.Mock).mockResolvedValue(makeSession());
+    const { queryByText } = renderScreen();
+    await waitFor(() => expect(getWorkout).toHaveBeenCalled());
+    expect(queryByText('Avg HR')).toBeNull();
+    expect(queryByText('Max HR')).toBeNull();
+  });
+
   it('Done returns to the Diary tab', () => {
     const { getByText } = renderScreen();
 

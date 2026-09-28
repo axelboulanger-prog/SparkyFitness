@@ -23,6 +23,17 @@ final class WatchSessionManager: NSObject, ObservableObject {
     @Published private(set) var isReachable: Bool = false
 
     private let store = CheckInStore.shared
+    private let workoutStore = WorkoutSessionStore.shared
+    private let workoutHealthKit = WorkoutHealthKitController.shared
+    /// Reads back the instants `WorkoutHealthKitController` formats with its
+    /// own default `ISO8601DateFormatter`, to record how far HR was sent.
+    private let instantParser = ISO8601DateFormatter()
+    /// Cumulative active energy already reported to the phone, so each batch
+    /// can carry only what was burned since the last one. Reset whenever a
+    /// workout starts — `WorkoutSessionStore.activeEnergyKcal` restarts from
+    /// nothing too, and a stale high-water mark would swallow the first
+    /// batches of the new workout.
+    private var reportedEnergyKcal: Double = 0
 
     /// True while a queued context request is still waiting to be answered.
     ///
@@ -30,10 +41,84 @@ final class WatchSessionManager: NSObject, ObservableObject {
     /// phone-free glance at the watch would leave another request behind, and
     /// the phone would answer the lot in one burst the next time it woke.
     private var hasQueuedContextRequest = false
+    /// True from the moment a HealthKit stop is asked for until its tail has
+    /// been sent and the plan cleared. A second finish or a new plan that
+    /// arrives in that window is held, not run against a session that `stop`
+    /// has already nilled.
+    private var collectionInFlight = false
+    /// Newest plan that arrived while a finish was in flight. Started only
+    /// after the old tail has been tagged with the old session.
+    private var pendingPlan: ActiveWorkoutPlan?
+    /// Pause snapshots that arrived before `beginPlan` started that session.
+    private var pendingIntervalTiming: [(
+        sessionId: String, revision: Int, pausedAt: Date?, excludedPauseSeconds: Int
+    )] = []
+    /// When each session was stopped, on the phone's clock when the phone
+    /// sent it. A start whose `armedAt` is at or before that is the queued
+    /// copy. A later arm of the same session id is a new workout.
+    private var endedAtBySession: [String: Date] = [:]
+    private static let endedSessionsKey = "sparky.watch.endedWorkoutSessions"
+    private static let endedSessionLimit = 20
+    /// A finish asked to tell the phone while another stop was already running.
+    private var pendingSendStop = false
+    /// Snapshot recovery and a `workoutStart` that arrives first both talk to
+    /// HealthKit. The start waits until this is `.finished`, or its session
+    /// can end up being the one recovery just reattached.
+    private enum HkRecovery {
+        case notStarted
+        case running
+        case finished
+    }
+    private var hkRecovery: HkRecovery = .notStarted
 
     private override init() {
         super.init()
+        endedAtBySession = Self.loadEndedSessions()
+        if !WCSession.isSupported() {
+            hkRecovery = .finished
+        }
         activate()
+    }
+
+    /// Remembers a stop. A later value wins so a second stop of a re-armed
+    /// session does not keep the earlier threshold.
+    private func rememberEnded(_ sessionId: String, at endedAt: Date) {
+        let kept = max(endedAtBySession[sessionId] ?? .distantPast, endedAt)
+        endedAtBySession[sessionId] = kept
+        let newest = endedAtBySession.sorted { $0.value < $1.value }
+        if newest.count > Self.endedSessionLimit {
+            for entry in newest.prefix(newest.count - Self.endedSessionLimit) {
+                endedAtBySession.removeValue(forKey: entry.key)
+            }
+        }
+        let raw = endedAtBySession.mapValues { $0.timeIntervalSince1970 }
+        if let data = try? JSONEncoder().encode(raw) {
+            UserDefaults.standard.set(data, forKey: Self.endedSessionsKey)
+        }
+    }
+
+    private static func loadEndedSessions() -> [String: Date] {
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: endedSessionsKey),
+           let raw = try? JSONDecoder().decode([String: TimeInterval].self, from: data) {
+            return raw.mapValues { Date(timeIntervalSince1970: $0) }
+        }
+        // The previous build stored ids and rejected every future start.
+        // Stamp them ended as of this launch so a queued copy is still
+        // dropped and a later re-arm is not.
+        guard let ids = defaults.stringArray(forKey: endedSessionsKey) else { return [:] }
+        let now = Date()
+        var migrated: [String: Date] = [:]
+        for id in ids {
+            migrated[id] = now
+        }
+        return migrated
+    }
+
+    /// True when this start is the queued copy of an arm that already stopped.
+    private func startIsStale(_ plan: ActiveWorkoutPlan) -> Bool {
+        guard let endedAt = endedAtBySession[plan.sessionId] else { return false }
+        return (plan.armedAt ?? .distantPast) <= endedAt
     }
 
     private func activate() {
@@ -324,7 +409,649 @@ final class WatchSessionManager: NSObject, ObservableObject {
         switch ContextPayloadMapper.type(of: payload) {
         case "context": handle(context: payload)
         case "ack": handle(ack: payload)
+        case "workoutStart": handle(workoutStart: payload)
+        case "workoutStop": handle(workoutStopFromPhone: payload)
+        case "intervalTiming": handle(intervalTiming: payload)
         default: break
+        }
+    }
+
+    // MARK: - Workout
+
+    /// Starts (or restarts, superseding whatever was running) the workout the
+    /// phone just armed the watch with. Requests HealthKit authorization every
+    /// time rather than caching the result: the wearer can grant or revoke it
+    /// from Settings between workouts, and a stale "already granted" would
+    /// silently run with no heart rate.
+    private func handle(workoutStart payload: [String: Any]) {
+        guard let plan = ContextPayloadMapper.workoutPlan(from: payload) else { return }
+        // A stop can be delivered before the queued copy of this start. That
+        // copy must not start a workout the phone or the wearer already ended.
+        if startIsStale(plan) { return }
+        // A redelivered `workoutStart` for the session already running must
+        // not stop HealthKit and restart the plan from set 1.
+        if workoutStore.plan?.sessionId == plan.sessionId { return }
+
+        // Recovery may still be reattaching the previous HealthKit session.
+        // Queue the plan and let that finish (and stop the old session)
+        // before this one starts, or `start` no-ops onto the old workout.
+        if hkRecovery != .finished {
+            pendingPlan = plan
+            collectionInFlight = true
+            return
+        }
+
+        if collectionInFlight {
+            pendingPlan = plan
+            return
+        }
+        if workoutStore.plan == nil {
+            // Nothing to tag, but a leftover HealthKit session still has to
+            // end before the new one starts.
+            collectionInFlight = true
+            pendingPlan = plan
+            workoutHealthKit.stop { [weak self] _, _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    let next = self.pendingPlan
+                    self.pendingPlan = nil
+                    self.pendingSendStop = false
+                    self.collectionInFlight = false
+                    if let next {
+                        self.beginPlan(next)
+                    }
+                }
+            }
+            return
+        }
+        pendingPlan = plan
+        finishCollection(sendStop: false)
+    }
+
+    /// Arms a plan that is not replacing a live one. Authorization is asked
+    /// every time: the wearer can change it in Settings between workouts.
+    private func beginPlan(_ plan: ActiveWorkoutPlan) {
+        guard !startIsStale(plan) else { return }
+        workoutStore.start(with: plan)
+        // Only this session's snapshots. Another plan's pause may already be
+        // queued and has to survive until that plan starts.
+        replayIntervalTiming(sessionId: plan.sessionId)
+        reportedEnergyKcal = 0
+        bindHealthKitCallbacks()
+        workoutHealthKit.requestAuthorization { [weak self] _ in
+            self?.workoutHealthKit.start(sessionId: plan.sessionId)
+        }
+    }
+
+    /// The HealthKit controller outlives a jetsam'd SwiftUI tree; the
+    /// closures do not. Rebind after recover so samples keep flowing.
+    private func bindHealthKitCallbacks() {
+        // Neither closure runs on the main actor by virtue of running on the
+        // main thread — `WorkoutHealthKitController` dispatches them there,
+        // but that alone doesn't satisfy Swift's isolation checking for the
+        // `@MainActor` types on the other end, so each hops explicitly, the
+        // same pattern `WCSessionDelegate`'s callbacks use above.
+        workoutHealthKit.onHeartRate = { [weak workoutStore] bpm in
+            Task { @MainActor in
+                workoutStore?.recordHeartRate(bpm: bpm)
+            }
+        }
+        workoutHealthKit.onBatchReady = { [weak self] samples in
+            Task { @MainActor in
+                self?.sendHeartRateBatchForCurrentExercise(samples)
+            }
+        }
+        workoutHealthKit.onActiveEnergy = { [weak workoutStore] kcal in
+            Task { @MainActor in
+                workoutStore?.recordActiveEnergy(kcal: kcal)
+            }
+        }
+        // Close out the exercise being left before the cursor moves, so its
+        // readings and energy are not credited to whatever comes next when
+        // the minute timer (or the final drain) fires. Both sides are main
+        // actor, so this runs synchronously ahead of the move.
+        workoutStore.onExerciseWillChange = { [weak self] outgoingExerciseEntryId in
+            guard let self else { return }
+            let minutes = self.workoutStore.closeExerciseWindow(outgoingExerciseEntryId)
+            self.sendHeartRateBatch(
+                self.workoutHealthKit.drainPending(),
+                exerciseEntryId: outgoingExerciseEntryId,
+                durationMinutes: minutes
+            )
+        }
+    }
+
+    /// Picks an HKWorkoutSession back up after jetsam, or starts a fresh one
+    /// against the persisted plan if the system let the recovered session go.
+    /// A start or finish that is already pending is newer than the snapshot,
+    /// so the snapshot is not restored; the leftover session is still ended
+    /// before that pending plan is armed.
+    private func recoverLiveWorkoutIfNeeded() {
+        retryPendingTails()
+        hkRecovery = .running
+        // A finish that was cut off is completed before anything else. It is
+        // older than any queued plan, and resuming it would restart a workout
+        // the wearer already ended.
+        if workoutStore.plan == nil,
+           let snapshot = workoutStore.storedSnapshot(),
+           let finishing = snapshot.finishing {
+            completeInterruptedFinish(snapshot, finishing: finishing)
+            return
+        }
+        if collectionInFlight || pendingPlan != nil {
+            stopLeftoverSessionThenResume()
+            return
+        }
+        if workoutStore.plan != nil {
+            hkRecovery = .finished
+            return
+        }
+        guard let snapshot = workoutStore.restoreSnapshot() else {
+            stopLeftoverSessionThenResume()
+            return
+        }
+        reportedEnergyKcal = snapshot.reportedEnergyKcal
+        bindHealthKitCallbacks()
+        workoutHealthKit.recoverIfNeeded(
+            heartRateSentThrough: snapshot.heartRateSentThrough
+        ) { [weak self] recovered in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.collectionInFlight || self.pendingPlan != nil {
+                    self.abandonRecoveredSessionThenResume()
+                    return
+                }
+                self.hkRecovery = .finished
+                if recovered { return }
+                self.workoutHealthKit.requestAuthorization { _ in
+                    self.workoutHealthKit.start(sessionId: snapshot.plan.sessionId)
+                }
+            }
+        }
+    }
+
+    /// The process stopped after a finish began but before its tail and stop
+    /// signal were queued. Ends any session HealthKit still has running, reads
+    /// the readings the phone has not seen back from the saved workout, sends
+    /// them with the exercise's duration, then clears the snapshot and arms
+    /// whatever plan waited. Resending is harmless: only readings past
+    /// `heartRateSentThrough`, and the server keeps the longer duration.
+    ///
+    /// When HealthKit saved no workout for this session, only the duration and
+    /// stop go out. Other readings from the same stretch of time are not
+    /// guessed onto the exercise.
+    private func completeInterruptedFinish(
+        _ snapshot: WorkoutSessionStore.Snapshot,
+        finishing: WorkoutSessionStore.Finishing
+    ) {
+        let sessionId = snapshot.plan.sessionId
+        let complete: ([HeartRateSample]) -> Void = { [weak self] samples in
+            guard let self else { return }
+            self.sendDetachedBatch(
+                samples,
+                sessionId: sessionId,
+                exerciseEntryId: finishing.exerciseEntryId,
+                durationMinutes: finishing.minutes
+            )
+            if finishing.sendStop {
+                self.transfer(
+                    OutboundPayloads.workoutStop(WorkoutStopSignal(sessionId: sessionId))
+                )
+            }
+            self.workoutStore.clearSnapshot()
+            self.hkRecovery = .finished
+            self.resumeQueuedPlan()
+        }
+        workoutHealthKit.recoverIfNeeded(
+            heartRateSentThrough: snapshot.heartRateSentThrough
+        ) { [weak self] recovered in
+            Task { @MainActor in
+                guard let self else { return }
+                if recovered {
+                    // Killed before HealthKit was told to end: the session
+                    // is still live, so stop it the normal way.
+                    // No `onBuffered`: the buffer and the tail arrive together.
+                    self.workoutHealthKit.stop(onLateTail: { [weak self] samples in
+                        MainActor.assumeIsolated {
+                            self?.deliverLateTail(
+                                samples,
+                                sessionId: sessionId,
+                                exerciseEntryId: finishing.exerciseEntryId
+                            )
+                        }
+                    }) { [weak self] samples, timedOut in
+                        MainActor.assumeIsolated {
+                            if timedOut {
+                                self?.parkLateTail(
+                                    sessionId: sessionId,
+                                    exerciseEntryId: finishing.exerciseEntryId,
+                                    sentThrough: snapshot.heartRateSentThrough
+                                )
+                            }
+                            complete(samples)
+                        }
+                    }
+                    return
+                }
+                self.workoutHealthKit.readSavedHeartRate(
+                    sessionId: sessionId,
+                    sentThrough: snapshot.heartRateSentThrough
+                ) { samples in
+                    Task { @MainActor in complete(samples ?? []) }
+                }
+            }
+        }
+    }
+
+    /// Queues a batch for a workout that is no longer the live plan, so it
+    /// cannot read its ids or energy from `workoutStore`. Energy is left out:
+    /// the running total it would be a delta against is gone.
+    private func sendDetachedBatch(
+        _ samples: [HeartRateSample],
+        sessionId: String,
+        exerciseEntryId: String,
+        durationMinutes: Double? = nil
+    ) {
+        let minutes = (durationMinutes ?? 0) > 0 ? durationMinutes : nil
+        guard !samples.isEmpty || minutes != nil else { return }
+        transfer(
+            OutboundPayloads.heartRateBatch(
+                HeartRateBatch(
+                    clientId: UUID().uuidString,
+                    sessionId: sessionId,
+                    exerciseEntryId: exerciseEntryId,
+                    samples: samples,
+                    activeEnergyKcal: nil,
+                    durationMinutes: minutes
+                )
+            )
+        )
+    }
+
+    /// The finish timed out before HealthKit's saved tail was read. Records
+    /// what is still owed so it goes out when `onLateTail` fires, or on the
+    /// next launch if this process does not live that long.
+    private func parkLateTail(
+        sessionId: String,
+        exerciseEntryId: String,
+        sentThrough: Date? = nil
+    ) {
+        workoutStore.addPendingTail(
+            WorkoutSessionStore.PendingTail(
+                sessionId: sessionId,
+                exerciseEntryId: exerciseEntryId,
+                sentThrough: sentThrough ?? workoutStore.heartRateSentThrough,
+                createdAt: Date()
+            )
+        )
+    }
+
+    /// A tail that arrived after its finish timed out.
+    private func deliverLateTail(
+        _ samples: [HeartRateSample],
+        sessionId: String,
+        exerciseEntryId: String
+    ) {
+        sendDetachedBatch(samples, sessionId: sessionId, exerciseEntryId: exerciseEntryId)
+        workoutStore.removePendingTail(sessionId: sessionId)
+    }
+
+    /// Tails parked by a finish that timed out, in a process that ended before
+    /// HealthKit handed them over. Read back from the saved workout. One that
+    /// HealthKit still has no workout for is kept for a later launch, up to a
+    /// day, in case the save is still pending.
+    private func retryPendingTails() {
+        for tail in workoutStore.pendingTails() {
+            workoutHealthKit.readSavedHeartRate(
+                sessionId: tail.sessionId,
+                sentThrough: tail.sentThrough
+            ) { [weak self] samples in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if let samples {
+                        self.deliverLateTail(
+                            samples,
+                            sessionId: tail.sessionId,
+                            exerciseEntryId: tail.exerciseEntryId
+                        )
+                    } else if Date().timeIntervalSince(tail.createdAt) > Self.pendingTailMaxAge {
+                        self.workoutStore.removePendingTail(sessionId: tail.sessionId)
+                    }
+                }
+            }
+        }
+    }
+
+    private static let pendingTailMaxAge: TimeInterval = 24 * 60 * 60
+
+    /// Ends a HealthKit session we are not going to keep, then arms whatever
+    /// plan was queued while recovery ran.
+    private func stopLeftoverSessionThenResume() {
+        workoutHealthKit.recoverIfNeeded { [weak self] recovered in
+            Task { @MainActor in
+                guard let self else { return }
+                let finish = {
+                    self.hkRecovery = .finished
+                    self.resumeQueuedPlan()
+                }
+                if recovered {
+                    self.workoutHealthKit.stop { _, _ in
+                        Task { @MainActor in finish() }
+                    }
+                } else {
+                    finish()
+                }
+            }
+        }
+    }
+
+    /// A new plan arrived after the snapshot was restored but before the old
+    /// session was safe to replace. Send the old tail, then drop it.
+    private func abandonRecoveredSessionThenResume() {
+        let closing = workoutStore.closeCurrentExerciseWindow()
+        let abandonedSessionId = workoutStore.plan?.sessionId
+        if let closing {
+            workoutStore.markFinishing(
+                WorkoutSessionStore.Finishing(
+                    exerciseEntryId: closing.id,
+                    minutes: closing.minutes,
+                    sendStop: false,
+                    requestedAt: Date()
+                )
+            )
+        }
+        workoutHealthKit.stop(onBuffered: { [weak self] samples in
+            MainActor.assumeIsolated {
+                guard let self, let closing else { return }
+                self.sendHeartRateBatch(
+                    samples,
+                    exerciseEntryId: closing.id,
+                    durationMinutes: closing.minutes
+                )
+            }
+        }, onLateTail: { [weak self] samples in
+            MainActor.assumeIsolated {
+                guard let self, let closing, let abandonedSessionId else { return }
+                self.deliverLateTail(
+                    samples,
+                    sessionId: abandonedSessionId,
+                    exerciseEntryId: closing.id
+                )
+            }
+        }) { [weak self] samples, timedOut in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if let closing {
+                    self.sendHeartRateBatch(samples, exerciseEntryId: closing.id)
+                    if timedOut, let abandonedSessionId {
+                        self.parkLateTail(sessionId: abandonedSessionId, exerciseEntryId: closing.id)
+                    }
+                }
+                self.workoutStore.reset()
+                self.hkRecovery = .finished
+                self.resumeQueuedPlan()
+            }
+        }
+    }
+
+    /// Starts the plan that waited out recovery. A phone stop that cleared it
+    /// while we waited leaves the watch idle.
+    private func resumeQueuedPlan() {
+        guard hkRecovery == .finished, collectionInFlight else { return }
+        let next = pendingPlan
+        pendingPlan = nil
+        pendingSendStop = false
+        collectionInFlight = false
+        if let next {
+            beginPlan(next)
+        }
+    }
+
+    /// The phone paused or resumed an interval. The snapshot is absolute and
+    /// numbered, so a resume that beats its queued pause still wins. A
+    /// snapshot that arrives before its plan is kept and applied in
+    /// `beginPlan` — dropping it here left the watch on a stale cap.
+    private func handle(intervalTiming payload: [String: Any]) {
+        guard let timing = ContextPayloadMapper.intervalTiming(from: payload) else { return }
+        if endedAtBySession[timing.sessionId] != nil,
+           workoutStore.plan?.sessionId != timing.sessionId,
+           pendingPlan?.sessionId != timing.sessionId {
+            return
+        }
+        if workoutStore.plan?.sessionId == timing.sessionId {
+            workoutStore.applyIntervalTiming(
+                sessionId: timing.sessionId,
+                revision: timing.revision,
+                pausedAt: timing.pausedAt,
+                excludedPauseSeconds: timing.excludedPauseSeconds
+            )
+            return
+        }
+        pendingIntervalTiming.append(timing)
+    }
+
+    private func replayIntervalTiming(sessionId: String) {
+        let queued = pendingIntervalTiming.filter { $0.sessionId == sessionId }
+        pendingIntervalTiming.removeAll { $0.sessionId == sessionId }
+        for timing in queued {
+            workoutStore.applyIntervalTiming(
+                sessionId: timing.sessionId,
+                revision: timing.revision,
+                pausedAt: timing.pausedAt,
+                excludedPauseSeconds: timing.excludedPauseSeconds
+            )
+        }
+    }
+
+    /// The wearer finished the workout on the PHONE. Tears down the same way
+    /// `endWorkout` does but sends nothing back — the phone is the one that
+    /// told us, and it flushes its own heart-rate buffer when it ends a
+    /// session, so echoing `workoutStop` at it would be a second flush of an
+    /// already-emptied buffer.
+    ///
+    /// A stop for a session we are not running does not tear anything down —
+    /// a queued stop must not cancel the next workout — but it is remembered,
+    /// so a start for that session still in the queue cannot revive it.
+    private func handle(workoutStopFromPhone payload: [String: Any]) {
+        guard let stop = ContextPayloadMapper.workoutStop(from: payload) else {
+            return
+        }
+        var endedAt = stop.stoppedAt ?? Date()
+        if workoutStore.plan?.sessionId == stop.sessionId, let armedAt = workoutStore.plan?.armedAt {
+            endedAt = max(endedAt, armedAt)
+        }
+        if pendingPlan?.sessionId == stop.sessionId, let armedAt = pendingPlan?.armedAt {
+            endedAt = max(endedAt, armedAt)
+        }
+        rememberEnded(stop.sessionId, at: endedAt)
+        pendingIntervalTiming.removeAll { $0.sessionId == stop.sessionId }
+        if pendingPlan?.sessionId == stop.sessionId {
+            pendingPlan = nil
+            return
+        }
+        guard workoutStore.plan?.sessionId == stop.sessionId else { return }
+        requestFinish(sendStop: false)
+    }
+
+    /// Sends one completed set, carrying whatever the wearer typed. Queued
+    /// like a check-in — a hole in the diary from a dropped delivery is not an
+    /// acceptable loss, unlike a stretch of missing heart rate.
+    func sendSetCompleted(_ step: WorkoutStep, values: SetValues) {
+        guard let sessionId = workoutStore.plan?.sessionId else { return }
+        let completed = CompletedSet(
+            clientId: UUID().uuidString,
+            sessionId: sessionId,
+            setId: step.plannedSet.setId,
+            weightKg: values.weightKg,
+            reps: values.reps,
+            completedAt: Date()
+        )
+        transfer(OutboundPayloads.setCompleted(completed))
+    }
+
+    /// Sends one heart-rate batch for whichever exercise is current right now.
+    ///
+    /// Queued like a completed set, NOT reachability-gated. A phone in a gym
+    /// bag two rooms away is the normal case, not the exception, and dropping
+    /// batches whenever it drifts out of range loses exactly the data this
+    /// feature exists to capture. The flush interval is a minute
+    /// (`WorkoutHealthKitController.batchInterval`) to keep the queue sane.
+    ///
+    /// Tagged with the exercise on screen, which is right because every
+    /// exercise change already sent what came before it
+    /// (`onExerciseWillChange`) — whatever is buffered now was measured during
+    /// the current exercise.
+    private func sendHeartRateBatchForCurrentExercise(
+        _ samples: [HeartRateSample],
+        durationMinutes: Double? = nil
+    ) {
+        // After the last set, `currentStep` is nil so the UI can show
+        // complete. The final drain still belongs to that last exercise.
+        let exerciseEntryId =
+            workoutStore.currentStep?.exerciseEntryId
+            ?? workoutStore.steps.last?.exerciseEntryId
+        guard let exerciseEntryId else { return }
+        sendHeartRateBatch(
+            samples,
+            exerciseEntryId: exerciseEntryId,
+            durationMinutes: durationMinutes
+        )
+    }
+
+    private func sendHeartRateBatch(
+        _ samples: [HeartRateSample],
+        exerciseEntryId: String,
+        durationMinutes: Double? = nil
+    ) {
+        guard let sessionId = workoutStore.plan?.sessionId else { return }
+        // `max(0, ...)` because the running total should only ever climb, but
+        // a HealthKit session that restarts mid-workout would reset it, and a
+        // negative delta would subtract calories the wearer really burned.
+        // Nil until HealthKit has delivered a reading, so a first HR batch
+        // does not post a fake measured zero before any energy exists.
+        let energyDelta: Double?
+        if let cumulative = workoutStore.activeEnergyKcal {
+            energyDelta = max(0, cumulative - reportedEnergyKcal)
+            reportedEnergyKcal = cumulative
+        } else {
+            energyDelta = nil
+        }
+        // The one place that can see both halves of a batch, and so the only
+        // place that can tell an empty one from an energy-only one. Callers
+        // hand over whatever the buffer held, including nothing.
+        guard !samples.isEmpty || (energyDelta ?? 0) > 0 || (durationMinutes ?? 0) > 0 else {
+            return
+        }
+        workoutStore.persistSnapshot(
+            reportedEnergyKcal: reportedEnergyKcal,
+            heartRateSentThrough: samples.compactMap { instantParser.date(from: $0.t) }.max()
+        )
+        let batch = HeartRateBatch(
+            clientId: UUID().uuidString,
+            sessionId: sessionId,
+            exerciseEntryId: exerciseEntryId,
+            samples: samples,
+            activeEnergyKcal: energyDelta,
+            durationMinutes: (durationMinutes ?? 0) > 0 ? durationMinutes : nil
+        )
+        transfer(OutboundPayloads.heartRateBatch(batch))
+    }
+
+    /// Ends the workout. The stop signal waits until HealthKit has finished
+    /// the workout and the tail has been queued. See `finishCollection`.
+    func endWorkout() {
+        requestFinish(sendStop: true)
+    }
+
+    /// A second finish or a plan change while `stop` is already running is
+    /// remembered and applied after the first tail is sent. Running it now
+    /// would reset the plan, or replace it, before that batch could read the
+    /// session id it belongs to.
+    private func requestFinish(sendStop: Bool) {
+        if collectionInFlight {
+            if sendStop {
+                pendingSendStop = true
+                if var finishing = workoutStore.finishing, !finishing.sendStop {
+                    finishing.sendStop = true
+                    workoutStore.markFinishing(finishing)
+                }
+            }
+            return
+        }
+        finishCollection(sendStop: sendStop)
+    }
+
+    /// Stops HealthKit, sends the tail and the exercise's wall-clock duration,
+    /// then clears local state. `sendStop` is false when the phone already
+    /// ended the workout and is only waiting on the watch's last samples.
+    ///
+    /// What HealthKit had already handed over is queued before anything waits
+    /// on the saved workout: `transferUserInfo` survives this process being
+    /// suspended or killed, a local buffer does not. The finish is recorded in
+    /// the snapshot first, so a relaunch that finds it reads the rest back
+    /// from Health (`completeInterruptedFinish`) instead of losing it.
+    private func finishCollection(sendStop: Bool) {
+        collectionInFlight = true
+        let closing = workoutStore.closeCurrentExerciseWindow()
+        let stopSessionId = workoutStore.plan?.sessionId
+        if let stopSessionId {
+            rememberEnded(stopSessionId, at: workoutStore.plan?.armedAt ?? Date())
+        }
+        if let closing {
+            workoutStore.markFinishing(
+                WorkoutSessionStore.Finishing(
+                    exerciseEntryId: closing.id,
+                    minutes: closing.minutes,
+                    sendStop: sendStop || pendingSendStop,
+                    requestedAt: Date()
+                )
+            )
+        }
+        workoutHealthKit.stop(onBuffered: { [weak self] samples in
+            MainActor.assumeIsolated {
+                guard let self, let closing else { return }
+                self.sendHeartRateBatch(
+                    samples,
+                    exerciseEntryId: closing.id,
+                    durationMinutes: closing.minutes
+                )
+            }
+        }, onLateTail: { [weak self] samples in
+            MainActor.assumeIsolated {
+                guard let self, let closing, let stopSessionId else { return }
+                self.deliverLateTail(
+                    samples,
+                    sessionId: stopSessionId,
+                    exerciseEntryId: closing.id
+                )
+            }
+        }) { [weak self] samples, timedOut in
+            // Synchronous, not a Task: a timed-out finish parks its tail here,
+            // and that has to happen before `onLateTail` can run.
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if let closing {
+                    self.sendHeartRateBatch(samples, exerciseEntryId: closing.id)
+                    if timedOut, let stopSessionId {
+                        self.parkLateTail(sessionId: stopSessionId, exerciseEntryId: closing.id)
+                    }
+                }
+                if (sendStop || self.pendingSendStop), let stopSessionId {
+                    self.transfer(
+                        OutboundPayloads.workoutStop(
+                            WorkoutStopSignal(sessionId: stopSessionId)
+                        )
+                    )
+                }
+                let next = self.pendingPlan
+                self.pendingPlan = nil
+                self.pendingSendStop = false
+                self.workoutStore.reset()
+                self.collectionInFlight = false
+                if let next {
+                    self.beginPlan(next)
+                }
+            }
         }
     }
 }
@@ -347,6 +1074,7 @@ extension WatchSessionManager: WCSessionDelegate {
             // works with the phone nowhere in sight.
             self.adoptReceivedContext()
             self.retryPending()
+            self.recoverLiveWorkoutIfNeeded()
             self.requestContext()
         }
     }

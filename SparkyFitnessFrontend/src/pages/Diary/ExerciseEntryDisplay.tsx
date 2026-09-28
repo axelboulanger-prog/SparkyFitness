@@ -35,6 +35,7 @@ import {
 } from '@workspace/shared';
 import { formatTimeOfDayString } from '@/utils/timeFormatters';
 import { exerciseDisplayLabel } from '@/utils/exerciseDisplayLabels';
+import { localizeMuscle, localizeEquipment } from '@/utils/exerciseTaxonomy';
 
 interface ExerciseEntryDisplayProps {
   exerciseEntry: ExerciseEntry;
@@ -296,6 +297,7 @@ const ExerciseEntryDisplay: React.FC<ExerciseEntryDisplayProps> = ({
               if (set.distance != null)
                 parts.push(formatDistance(set.distance));
               if (Number.isFinite(set.rpe)) parts.push(`RPE ${set.rpe}`);
+              if (Number.isFinite(set.rir)) parts.push(`RIR ${set.rir}`);
               if (parts.length === 0) return null;
               return (
                 <span
@@ -329,7 +331,9 @@ const ExerciseEntryDisplay: React.FC<ExerciseEntryDisplayProps> = ({
             <span className="font-medium text-gray-500 dark:text-gray-400">
               {t('exerciseCard.primaryMusclesLabel', 'Primary Muscles')}:{' '}
             </span>
-            {snapshot.primary_muscles.join(', ')}
+            {snapshot.primary_muscles
+              .map((m) => localizeMuscle(t, m))
+              .join(', ')}
           </div>
         )}
         {snapshot?.secondary_muscles &&
@@ -339,7 +343,9 @@ const ExerciseEntryDisplay: React.FC<ExerciseEntryDisplayProps> = ({
                 {t('exerciseCard.secondaryMusclesLabel', 'Secondary Muscles')}
                 :{' '}
               </span>
-              {snapshot.secondary_muscles.join(', ')}
+              {snapshot.secondary_muscles
+                .map((m) => localizeMuscle(t, m))
+                .join(', ')}
             </div>
           )}
         {snapshot?.equipment && snapshot.equipment.length > 0 && (
@@ -347,7 +353,9 @@ const ExerciseEntryDisplay: React.FC<ExerciseEntryDisplayProps> = ({
             <span className="font-medium text-gray-500 dark:text-gray-400">
               {t('exerciseCard.equipmentLabel', 'Equipment')}:{' '}
             </span>
-            {snapshot.equipment.join(', ')}
+            {snapshot.equipment
+              .map((eq) => localizeEquipment(t, eq))
+              .join(', ')}
           </div>
         )}
         {exerciseEntry.notes && (

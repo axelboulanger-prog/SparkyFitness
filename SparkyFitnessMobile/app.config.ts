@@ -19,6 +19,8 @@ const PROD_PACKAGE = ANDROID_PROD_BUNDLE_IDENTIFIER;
 
 const androidPermissions = [
   'android.permission.INTERNET',
+  'android.permission.POST_NOTIFICATIONS',
+  'android.permission.POST_PROMOTED_NOTIFICATIONS',
   'android.permission.health.READ_ACTIVE_CALORIES_BURNED',
   'android.permission.health.READ_BASAL_BODY_TEMPERATURE',
   'android.permission.health.READ_BASAL_METABOLIC_RATE',
@@ -214,7 +216,9 @@ export default ({ config }: ConfigContext): Partial<ExpoConfig> => {
       './plugins/withAppLanguage',
       './plugins/withCalorieWidget',
       './plugins/withExactAlarmModule',
+      './plugins/withWorkoutNotification',
       './plugins/withEnrichedMarkdownNoMath',
+      './plugins/withSceneLifecycle',
       [
         'expo-localization',
         {

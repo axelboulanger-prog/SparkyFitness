@@ -40,8 +40,23 @@ export const workoutPresetExerciseResponseSchema = z.object({
   increment_type: z.enum(["weight", "reps"]).nullable().optional(),
   increment_value: z.number().nullable().optional(),
   equipment_brand: z.string().nullable().optional(),
+  /**
+   * Within-session ramp in kg: each successive working set steps by this much
+   * (negative ramps down). Null = off. Unrelated to increment_value, which is
+   * the between-session progression step. Optional: older servers omit it.
+   */
+  ramp_increment: z.number().nullable().optional(),
   sets: z.array(workoutPresetSetResponseSchema),
 });
+
+export const workoutFormatSchema = z.enum([
+  "standard",
+  "interval",
+  "tabata",
+  "amrap",
+  "emom",
+  "for_time",
+]);
 
 export const workoutPresetResponseSchema = z.object({
   id: z.number(),
@@ -49,6 +64,8 @@ export const workoutPresetResponseSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
   is_public: z.boolean().nullable(),
+  workout_format: workoutFormatSchema.default("standard"),
+  time_cap_seconds: z.number().int().nullable().optional(),
   /** Absent from search results, present on list/detail responses. */
   created_at: z.string().optional(),
   updated_at: z.string().optional(),
@@ -81,6 +98,9 @@ export const workoutPresetSetRequestSchema = z.object({
   notes: z.string().nullable().optional(),
 });
 
+/** workout_preset_exercises.ramp_increment is numeric(6,2). */
+export const RAMP_INCREMENT_MAX_KG = 9999.99;
+
 export const workoutPresetExerciseRequestSchema = z
   .object({
     /** UUID, or an external source id resolved server-side (free-exercise-db). */
@@ -97,6 +117,13 @@ export const workoutPresetExerciseRequestSchema = z
     increment_type: z.enum(["weight", "reps"]).nullable().optional(),
     increment_value: z.number().positive().nullable().optional(),
     equipment_brand: z.string().nullable().optional(),
+    // Kg per working set within one session; bounded by numeric(6,2).
+    ramp_increment: z
+      .number()
+      .min(-RAMP_INCREMENT_MAX_KG)
+      .max(RAMP_INCREMENT_MAX_KG)
+      .nullable()
+      .optional(),
     sets: z.array(workoutPresetSetRequestSchema).optional(),
   })
   .superRefine((val, ctx) => {
@@ -119,6 +146,8 @@ export const workoutPresetCreateRequestSchema = z.object({
   name: z.string().min(1),
   description: z.string().nullable().optional(),
   is_public: z.boolean().optional(),
+  workout_format: workoutFormatSchema.optional().default("standard"),
+  time_cap_seconds: z.number().int().positive().nullable().optional(),
   exercises: z.array(workoutPresetExerciseRequestSchema).default([]),
 });
 
@@ -127,11 +156,14 @@ export const workoutPresetUpdateRequestSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().nullable().optional(),
   is_public: z.boolean().optional(),
+  workout_format: workoutFormatSchema.optional(),
+  time_cap_seconds: z.number().int().positive().nullable().optional(),
   exercises: z.array(workoutPresetExerciseRequestSchema).optional(),
 });
 
 // --- Types ---
 
+export type WorkoutFormat = z.infer<typeof workoutFormatSchema>;
 export type WorkoutPresetSetResponse = z.infer<
   typeof workoutPresetSetResponseSchema
 >;

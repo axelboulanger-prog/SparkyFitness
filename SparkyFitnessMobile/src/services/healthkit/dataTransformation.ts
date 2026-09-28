@@ -43,6 +43,31 @@ const isOwnRecord = (rec: Record<string, unknown>): boolean => {
   return (rec.sourceBundleId as string | undefined) === ownBundleId;
 };
 
+/**
+ * Metadata key the watch app stamps onto every workout it saves to HealthKit.
+ *
+ * Duplicated as a literal in
+ * `targets/watch/Infrastructure/WorkoutHealthKitController.swift`
+ * (`sessionMetadataKey`) — a Swift watch target and this module have no way to
+ * share a constant. Renaming one without the other silently reintroduces the
+ * duplicate workouts this guards against.
+ */
+export const WATCH_SESSION_METADATA_KEY = 'SparkyFitnessSessionId';
+
+/**
+ * True for a workout this app wrote from the paired watch.
+ *
+ * Separate from `isOwnRecord` because that compares the source bundle id, and
+ * the watch app's bundle (`<phone-bundle>.watchkitapp`) is not the phone's —
+ * so a workout saved on the wrist looks like a third-party record to it. The
+ * live-workout flow already logged these sets in the diary as they happened;
+ * re-importing the HealthKit copy would file the same session a second time.
+ */
+export const isOwnWatchWorkout = (rec: Record<string, unknown>): boolean => {
+  const metadata = rec.metadata as Record<string, unknown> | undefined;
+  return metadata?.[WATCH_SESSION_METADATA_KEY] !== undefined;
+};
+
 // ============================================================================
 // Transformer Infrastructure
 // ============================================================================
@@ -481,7 +506,10 @@ const ACTIVITY_MAP: Record<number, string> = {
   82: 'Swim Bike Run',
   83: 'Transition',
   84: 'Underwater Diving',
-} as const;
+  2998: 'Rest',
+  2999: 'Group',
+  3000: 'Other',
+};
 
 // Food correlations carry only an instant, not a meal label, so we infer the meal type
 // from the local time of day (fallback 'snacks'; the server also defaults to snacks).
@@ -579,6 +607,9 @@ const DIRECT_TRANSFORMERS: Record<string, DirectTransformer> = {
 
   Workout: (rec, record, _metricConfig, output) => {
     if (!rec.startTime || !rec.endTime) return;
+    // Written by our own watch app during a live Sparky workout, whose sets
+    // are already in the diary. See `isOwnWatchWorkout`.
+    if (isOwnWatchWorkout(rec)) return;
 
     const activityType = rec.activityType as number | undefined;
     const activityTypeName = activityType

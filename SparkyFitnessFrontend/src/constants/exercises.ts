@@ -326,21 +326,33 @@ export type SetTableModality = Exclude<ExerciseModality, 'duration_distance'>;
 
 export const SET_TABLE_LAYOUT: Record<
   SetTableModality,
-  { gridClass: string; showReps: boolean; showWeight: boolean }
+  {
+    gridClass: string;
+    /** Same grid with one extra column for RIR (diary entries only). */
+    gridClassWithRir: string;
+    showReps: boolean;
+    showWeight: boolean;
+  }
 > = {
   weight_reps: {
     gridClass:
       'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    gridClassWithRir:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
     showReps: true,
     showWeight: true,
   },
   reps_only: {
     gridClass: 'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    gridClassWithRir:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
     showReps: true,
     showWeight: false,
   },
   duration: {
     gridClass: 'grid grid-cols-[20px_140px_1fr_1fr_1fr_72px] gap-1.5 grow',
+    gridClassWithRir:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
     showReps: false,
     showWeight: false,
   },
@@ -366,19 +378,4 @@ export const SET_TYPE_STYLES: Record<string, string> = {
   Technique: 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300',
   Isometric:
     'bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300',
-};
-
-/**
- * Maps the body-map SVG's `path[class]` names to the muscle vocabulary stored in
- * exercises.primary_muscles/secondary_muscles (the free-exercise-db muscle names, e.g.
- * "abdominals", "lower back", "quadriceps"). Shared by BodyMapFilter (exercise search
- * filter) and WorkoutSessionBodyMap (workout session muscle summary) so the SVG-to-schema
- * mapping only exists once.
- */
-export const svgClassToSchemaName: Record<string, string> = {
-  abdominal: 'abdominals',
-  lowerback: 'lower back',
-  quads: 'quadriceps',
-  obliques: 'abdominals', // Map obliques to abdominals
-  // Add other mappings if necessary, e.g. 'lats' if it appears in SVG
 };

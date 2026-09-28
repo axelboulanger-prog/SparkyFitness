@@ -37,4 +37,6 @@ export const reportKeys = {
       endDate,
       { userId },
     ] as const,
+  workoutDays: (startDate: string, endDate: string, userId?: string) =>
+    ['reports', 'workoutDays', startDate, endDate, { userId }] as const,
 };

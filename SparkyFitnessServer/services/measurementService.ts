@@ -1,9 +1,11 @@
 import { log } from '../config/logging.js';
+import { getClient } from '../db/poolManager.js';
 import measurementRepository from '../models/measurementRepository.js';
 import { loadUserTimezone } from '../utils/timezoneLoader.js';
 import {
   pickMealTypeForTime,
   userHourMinute,
+  clockInZone,
   instantToDay,
   instantHourMinute,
   instantToDayWithOffset,
@@ -641,7 +643,10 @@ async function upsertWaterIntake(
       const hasVolumeOverride =
         Number(containerRow?.volume) > 0 && !!containerRow?.linked_food_id;
 
+      let userTz: string | null = null;
       if (containerRow && containerRow.linked_food_id) {
+        const tz = await loadUserTimezone(authenticatedUserId);
+        userTz = tz;
         linkedFood = await foodRepository.getFoodById(
           containerRow.linked_food_id,
           authenticatedUserId
@@ -678,7 +683,6 @@ async function upsertWaterIntake(
           // The meal times are wall-clock times in the user's own day, so
           // "now" has to be read in their zone. Taking the server's clock put
           // a 15:16 drink for a UTC-4 user at 19:16, a whole meal away.
-          const tz = await loadUserTimezone(authenticatedUserId);
           targetMealTypeId =
             pickMealTypeForTime(mealTypes, userHourMinute(tz))?.id ?? null;
         }
@@ -695,6 +699,7 @@ async function upsertWaterIntake(
 
         if (linkedFood && linkedVariant) {
           const snapshot = buildFoodEntrySnapshot(linkedFood, linkedVariant);
+          const entryTime = userTz ? clockInZone(userTz) : null;
           const foodEntryInput = {
             user_id: authenticatedUserId,
             food_id: linkedFood.id,
@@ -707,6 +712,7 @@ async function upsertWaterIntake(
             quantity: linkedQuantity,
             unit: linkedVariant.serving_unit || 'serving',
             entry_date: entryDate,
+            entry_time: entryTime,
             food_entry_meal_id: null,
             meal_plan_template_id: null,
             ...snapshot,
@@ -2093,12 +2099,47 @@ async function updateWaterIntakeLogTime(
   if (!ownerId) {
     throw new Error('Water intake log entry not found or access denied');
   }
-  const updated = await measurementRepository.updateWaterIntakeLogTime(
-    logId,
-    authenticatedUserId,
-    loggedAt
-  );
-  return updated;
+
+  const client = await getClient(authenticatedUserId);
+  try {
+    await client.query('BEGIN');
+
+    const updated = await measurementRepository.updateWaterIntakeLogTime(
+      logId,
+      authenticatedUserId,
+      loggedAt,
+      client
+    );
+    if (!updated) {
+      throw new Error('Water intake log entry not found');
+    }
+
+    if (updated.food_entry_id) {
+      const tz = await loadUserTimezone(authenticatedUserId);
+      const { hour, minute } = instantHourMinute(loggedAt, tz);
+      const entryTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+      const foodUpdated = await foodRepository.updateFoodEntryTime(
+        updated.food_entry_id,
+        authenticatedUserId,
+        entryTime,
+        client
+      );
+      if (!foodUpdated) {
+        throw new Error(
+          `Linked food entry ${updated.food_entry_id} not found or update failed`
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    return updated;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    log('error', `Error updating water intake log time for ${logId}:`, err);
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export { updateWaterIntakeLogTime };

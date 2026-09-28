@@ -19,6 +19,16 @@ import {
 import z from 'zod';
 import { parseJsonArray } from './exerciseService';
 
+/** The user's own previously logged workout locations, most recent first. */
+export const fetchWorkoutLocations = async (): Promise<string[]> => {
+  const data: unknown = await apiCall('/exercise-preset-entries/locations', {
+    method: 'GET',
+  });
+  return Array.isArray(data)
+    ? data.filter((value): value is string => typeof value === 'string')
+    : [];
+};
+
 export const fetchExerciseEntries = async (
   date: string,
   userId?: string
@@ -77,20 +87,22 @@ export const createExerciseEntry = async (
 
 export const logWorkoutPreset = async (
   workoutPresetId: string | number,
-  entryDate: string
+  entryDate: string,
+  workoutPlanAssignmentId?: number | string | null
 ): Promise<void> => {
   return apiCall('/exercise-preset-entries', {
     method: 'POST',
     body: JSON.stringify({
-      workout_preset_id: workoutPresetId,
+      workout_preset_id: Number(workoutPresetId),
       entry_date: entryDate,
+      ...(workoutPlanAssignmentId != null ? { workoutPlanAssignmentId } : {}),
     }),
   });
 };
 
 export const createPresetSession = async (
   payload: CreatePresetSessionRequest
-): Promise<void> => {
+): Promise<PresetSessionResponse> => {
   return apiCall('/exercise-preset-entries', {
     method: 'POST',
     body: JSON.stringify(payload),

@@ -83,11 +83,13 @@ describe('presetFormReducer', () => {
       exercise: exercise(),
       exerciseClientId: 'e1',
       setClientId: 's1',
+      serverId: 'entry-1',
     });
 
     expect(next.exercises).toHaveLength(1);
     expect(next.exercises[0]).toEqual({
       clientId: 'e1',
+      serverId: 'entry-1',
       exerciseId: 'ex-1',
       exerciseName: 'Bench Press',
       exerciseCategory: 'strength',
@@ -98,6 +100,7 @@ describe('presetFormReducer', () => {
       incrementType: 'weight',
       incrementValue: 5,
       equipmentBrand: null,
+      rampIncrement: null,
       sets: [
         {
           clientId: 's1',
@@ -118,6 +121,7 @@ describe('presetFormReducer', () => {
         exercise: exercise(),
         exerciseClientId: 'e1',
         setClientId: 's1',
+        serverId: 'entry-1',
       });
       expect(next.exercises[0].sets[0].restTime).toBe(150);
     } finally {
@@ -131,6 +135,7 @@ describe('presetFormReducer', () => {
       exercise: exercise({ images: undefined as unknown as string[] }),
       exerciseClientId: 'e1',
       setClientId: 's1',
+      serverId: 'entry-1',
     });
     expect(next.exercises[0].images).toEqual([]);
   });
@@ -836,6 +841,8 @@ describe('useWorkoutPresetForm', () => {
     expect(result.current.state).toEqual({
       name: '',
       description: '',
+      workoutFormat: 'standard',
+      timeCapSeconds: null,
       exercises: [],
     });
     expect(result.current.exercisesModifiedRef.current).toBe(false);

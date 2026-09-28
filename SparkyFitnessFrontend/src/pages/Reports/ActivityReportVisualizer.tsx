@@ -14,6 +14,7 @@ import {
   useWorkoutGpsPoints,
   useWorkoutLaps,
   useWorkoutHrZones,
+  useHealthMetricSamples,
 } from '@/hooks/useGenericHealth';
 import {
   processChartData,
@@ -36,10 +37,13 @@ import WorkoutSessionBreakdown from '@/components/ExerciseCharts/WorkoutSessionB
 import ActivityReportMap from './ActivityReportMap';
 import WorkoutReportVisualizer from './WorkoutReportVisualizer';
 import { ChartDataPoint } from '@/types/reports';
+import { buildWorkoutHeartRateSeries } from '@workspace/shared';
 
 interface ActivityReportVisualizerProps {
   exerciseEntryId: string;
   providerName: string;
+  /** `outdoor` is the cardio list: route map and heart-rate chart only. */
+  variant?: 'full' | 'outdoor';
 }
 
 type XAxisMode = 'timeOfDay' | 'activityDuration' | 'distance';
@@ -47,6 +51,7 @@ type XAxisMode = 'timeOfDay' | 'activityDuration' | 'distance';
 const ActivityReportVisualizer = ({
   exerciseEntryId,
   providerName,
+  variant = 'full',
 }: ActivityReportVisualizerProps) => {
   const { t } = useTranslation();
   const [xAxisMode, setXAxisMode] = useState<XAxisMode>('timeOfDay');
@@ -62,6 +67,7 @@ const ActivityReportVisualizer = ({
     energyUnit,
     convertEnergy,
     water_display_unit,
+    timezone,
   } = usePreferences();
 
   // useWorkoutGpsPoints returns one row for the whole workout (its `points`
@@ -69,6 +75,45 @@ const ActivityReportVisualizer = ({
   const { data: gpsRow, isLoading: gpsLoading } =
     useWorkoutGpsPoints(exerciseEntryId);
   const gpsPoints = gpsRow?.points;
+  const entryRecord = exerciseEntry as
+    | {
+        entry_date?: string;
+        entry_time?: string | null;
+        record_timezone?: string | null;
+        duration_minutes?: number | null;
+      }
+    | undefined;
+  const entryDateRaw = entryRecord?.entry_date;
+  const entryDate = entryDateRaw ? String(entryDateRaw).slice(0, 10) : '';
+  const sampleEndDate = entryDate
+    ? new Date(Date.parse(`${entryDate}T00:00:00Z`) + 24 * 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 10)
+    : undefined;
+  const { data: hrBuckets } = useHealthMetricSamples(
+    'heart_rate',
+    entryDate,
+    sampleEndDate
+  );
+  const workoutHrSeries = useMemo(
+    () =>
+      buildWorkoutHeartRateSeries(
+        hrBuckets,
+        exerciseEntryId,
+        entryRecord,
+        timezone
+      ).map((point): ChartDataPoint => ({
+        timestamp: point.timestamp,
+        activityDuration: point.elapsedMinutes,
+        distance: 0,
+        speed: 0,
+        pace: 0,
+        heartRate: point.bpm,
+        runCadence: 0,
+        elevation: null,
+      })),
+    [hrBuckets, exerciseEntryId, entryRecord, timezone]
+  );
   const { data: dbLaps } = useWorkoutLaps(exerciseEntryId);
   const { data: dbHrZones } = useWorkoutHrZones(exerciseEntryId);
 
@@ -92,6 +137,11 @@ const ActivityReportVisualizer = ({
         averageRunCadence: l.avg_cadence ?? 0,
         elevationGain: l.elevation_gain_meters ?? 0,
         elevationLoss: l.elevation_loss_meters ?? 0,
+        // 0 rather than null: the lap table treats 0 as "no data" and renders
+        // N/A. Rows written before the moving-telemetry columns existed stay
+        // null until a re-sync or the Garmin backfill repopulates them.
+        averageMovingSpeed: l.avg_moving_speed_mps ?? 0,
+        movingDuration: l.moving_time_seconds ?? 0,
       }));
     }
     return activityData?.activity?.splits?.lapDTOs || [];
@@ -305,18 +355,33 @@ const ActivityReportVisualizer = ({
       : null;
 
   // Stored values are kcal; convert before labelling with the selected unit.
+  // HealthKit reports active energy only, so `restingCalories` is routinely
+  // NULL — render that side as "—" rather than `?? 0`, which would print a
+  // fabricated zero (e.g. "57 / 0 kcal") that reads as "burned zero resting
+  // calories" instead of "resting calories weren't reported".
   const caloriesBreakdownFormatted =
     stats.activeCalories != null || stats.restingCalories != null
-      ? `${Math.round(convertEnergy(stats.activeCalories ?? 0, 'kcal', energyUnit))} / ${Math.round(convertEnergy(stats.restingCalories ?? 0, 'kcal', energyUnit))} ${getEnergyUnitString(energyUnit)}`
+      ? `${stats.activeCalories != null ? Math.round(convertEnergy(stats.activeCalories, 'kcal', energyUnit)) : '—'} / ${stats.restingCalories != null ? Math.round(convertEnergy(stats.restingCalories, 'kcal', energyUnit)) : '—'} ${getEnergyUnitString(energyUnit)}`
       : null;
 
   // formatPace only formats — the caller converts, as the average-pace block
   // above does. Without this the value stayed min/km under a "/mi" label.
-  const avgMovingSpeedFormatted = (() => {
-    if (stats.avgMovingSpeedMps == null || stats.avgMovingSpeedMps <= 0) {
+  //
+  // Distance over moving time, mirroring the distance-over-elapsed-time
+  // definition Avg Pace uses, so the two tiles differ only by which time span
+  // they divide by and both stay hand-checkable. avg_moving_speed_mps (the
+  // mean of the moving GPS samples) is the fallback for entries that have a
+  // moving speed but no moving duration.
+  const avgMovingPaceFormatted = (() => {
+    const minPerKm =
+      stats.distance && stats.movingTimeSeconds
+        ? stats.movingTimeSeconds / 60 / stats.distance
+        : stats.avgMovingSpeedMps != null && stats.avgMovingSpeedMps > 0
+          ? 1000 / (stats.avgMovingSpeedMps * 60)
+          : null;
+    if (minPerKm == null || !Number.isFinite(minPerKm) || minPerKm <= 0) {
       return null;
     }
-    const minPerKm = 1000 / (stats.avgMovingSpeedMps * 60);
     const paceForUnit =
       distanceUnit === 'miles' ? minPerKm * 1.60934 : minPerKm;
     return formatPace(paceForUnit, distanceUnit);
@@ -393,6 +458,59 @@ const ActivityReportVisualizer = ({
     stats.activityName ||
     ((exerciseEntry as Record<string, unknown>)?.['exercise_name'] as string) ||
     t('common.workout', 'Workout');
+
+  if (variant === 'outdoor') {
+    const mapPolyline =
+      gpsPoints && gpsPoints.length > 0
+        ? gpsPoints
+            .filter((p) => p.lat !== 0 && p.lon !== 0)
+            .map((p) => ({ lat: p.lat, lon: p.lon }))
+        : activityData?.activity?.details?.geoPolylineDTO?.polyline || [];
+    return (
+      <div className="space-y-4">
+        {mapPolyline.length > 0 ? (
+          <ActivityReportMap polylineData={mapPolyline} height={260} />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            {t(
+              'exerciseAnalytics.cardio.noRoute',
+              'No GPS route stored. Indoor workouts do not have one. An outdoor walk only has a route if Apple Health shared it when the workout synced.'
+            )}
+          </p>
+        )}
+        {heartRateData.length > 0 || workoutHrSeries.length > 0 ? (
+          <ActivityHeartRateChart
+            data={heartRateData.length > 0 ? heartRateData : workoutHrSeries}
+            xAxisMode={effectiveXAxisMode}
+            getXAxisDataKey={getXAxisDataKey}
+            getXAxisLabel={getXAxisLabel}
+            distanceUnit={distanceUnit}
+          />
+        ) : stats.heartRate ? (
+          <p className="text-sm text-muted-foreground">
+            {t('exerciseAnalytics.cardio.avgHeartRate', {
+              defaultValue:
+                'Average heart rate {{bpm}} bpm. Beat-by-beat samples were not stored.',
+              bpm: Math.round(stats.heartRate),
+            })}
+          </p>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            {t(
+              'exerciseAnalytics.cardio.noHeartRate',
+              'No heart-rate samples for this workout.'
+            )}
+          </p>
+        )}
+        {hrInTimezonesData && hrInTimezonesData.length > 0 && (
+          <ActivityHeartRateZonesChart
+            data={hrInTimezonesData}
+            providerName={providerName}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="activity-report-visualizer p-4">
@@ -485,7 +603,7 @@ const ActivityReportVisualizer = ({
           movingTime={movingTimeFormatted}
           elapsedTime={elapsedTimeFormatted}
           caloriesBreakdown={caloriesBreakdownFormatted}
-          avgMovingSpeed={avgMovingSpeedFormatted}
+          avgMovingPace={avgMovingPaceFormatted}
           elevationRange={elevationRangeFormatted}
           weather={weatherFormatted}
           gear={gearFormatted}

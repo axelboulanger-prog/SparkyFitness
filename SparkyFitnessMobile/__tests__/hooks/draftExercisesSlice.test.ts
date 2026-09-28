@@ -1,4 +1,5 @@
 import { draftExercisesReducer } from '../../src/hooks/draftExercisesSlice';
+import { buildPresetExercisesPayload } from '../../src/utils/workoutSession';
 import { getDefaultRestSec } from '../../src/stores/appPreferencesStore';
 import type { WorkoutDraftExercise } from '../../src/types/drafts';
 import type { Exercise } from '../../src/types/exercise';
@@ -31,6 +32,7 @@ describe('draftExercisesReducer REPLACE_EXERCISE', () => {
         category: 'strength',
       } as Exercise,
       setClientId: 'new-set',
+      serverId: 'new-entry',
       preserveSets: true,
     });
 
@@ -56,6 +58,7 @@ describe('draftExercisesReducer REPLACE_EXERCISE', () => {
         category: 'isometric',
       } as Exercise,
       setClientId: 'new-set',
+      serverId: 'new-entry',
       preserveSets: true,
     });
 
@@ -83,10 +86,42 @@ describe('draftExercisesReducer REPLACE_EXERCISE', () => {
         category: 'strength',
       } as Exercise,
       setClientId: 'new-set',
+      serverId: 'new-entry',
       preserveSets: false,
     });
 
     expect(next[0].sets).toHaveLength(1);
     expect(next[0].sets[0]?.clientId).toBe('new-set');
+  });
+});
+
+describe('draftExercisesReducer SET_EXERCISE_PROGRESSION', () => {
+  it('lands editor patches on the draft fields the preset payload saves', () => {
+    const [exercise] = draftExercisesReducer([buildWeightRepsExercise()], {
+      type: 'SET_EXERCISE_PROGRESSION',
+      exerciseClientId: 'ex-1',
+      patch: {
+        progressionMode: 'fixed',
+        repGoal: 8,
+        incrementValue: 2.5,
+        rampIncrement: -4.54,
+      },
+    });
+
+    const [payload] = buildPresetExercisesPayload([exercise], 'kg');
+    expect(payload).toMatchObject({
+      progression_mode: 'fixed',
+      rep_goal: 8,
+      increment_value: 2.5,
+      ramp_increment: -4.54,
+    });
+  });
+
+  it('saves no ramp by default', () => {
+    const [payload] = buildPresetExercisesPayload(
+      [buildWeightRepsExercise()],
+      'kg'
+    );
+    expect(payload.ramp_increment).toBeNull();
   });
 });

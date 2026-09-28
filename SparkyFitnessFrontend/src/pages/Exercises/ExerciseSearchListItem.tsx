@@ -16,6 +16,8 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { ElementType, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { localizeMuscle, localizeEquipment } from '@/utils/exerciseTaxonomy';
 
 type ExerciseCategory = keyof typeof EXERCISE_CATEGORY_META;
 
@@ -50,6 +52,7 @@ export const ExerciseSearchListItem = ({
   actionText,
   actionIcon: ActionIcon,
 }: ExerciseListItemProps) => {
+  const { t } = useTranslation();
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [isActioning, setIsActioning] = useState(false);
   const { energyUnit, convertEnergy } = usePreferences();
@@ -198,7 +201,9 @@ export const ExerciseSearchListItem = ({
             <span className="font-medium text-gray-500 dark:text-gray-400">
               Primary:{' '}
             </span>
-            {exercise.primary_muscles.join(', ')}
+            {exercise.primary_muscles
+              .map((m) => localizeMuscle(t, m))
+              .join(', ')}
           </div>
         )}
         {exercise.secondary_muscles &&
@@ -207,7 +212,9 @@ export const ExerciseSearchListItem = ({
               <span className="font-medium text-gray-500 dark:text-gray-400">
                 Secondary:{' '}
               </span>
-              {exercise.secondary_muscles.join(', ')}
+              {exercise.secondary_muscles
+                .map((m) => localizeMuscle(t, m))
+                .join(', ')}
             </div>
           )}
         {exercise.equipment && exercise.equipment.length > 0 && (
@@ -215,7 +222,9 @@ export const ExerciseSearchListItem = ({
             <span className="font-medium text-gray-500 dark:text-gray-400">
               Equipment:{' '}
             </span>
-            {exercise.equipment.join(', ')}
+            {exercise.equipment
+              .map((eq) => localizeEquipment(t, eq))
+              .join(', ')}
           </div>
         )}
 

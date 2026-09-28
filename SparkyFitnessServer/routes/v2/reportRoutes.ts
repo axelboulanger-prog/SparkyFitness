@@ -4,7 +4,8 @@ import onBehalfOfMiddleware from '../../middleware/onBehalfOfMiddleware.js';
 import checkPermissionMiddleware from '../../middleware/checkPermissionMiddleware.js';
 import alcoholWeekService from '../../services/alcoholWeekService.js';
 import hydrationNutritionRangeService from '../../services/hydrationNutritionRangeService.js';
-import { isDayString } from '@workspace/shared';
+import exerciseEntryRepository from '../../models/exerciseEntry.js';
+import { isDayString, type WorkoutDaysResponse } from '@workspace/shared';
 
 const router = express.Router();
 
@@ -149,5 +150,59 @@ const getHydrationNutritionRangeHandler: RequestHandler = async (
 };
 
 router.get('/hydration-nutrition-range', getHydrationNutritionRangeHandler);
+
+/**
+ * @swagger
+ * /v2/reports/workout-days:
+ *   get:
+ *     summary: Get per-day workout counts for the workout heatmap
+ *     description: Only days with at least one logged workout are returned. Device "Active Calories" summary rows are not counted.
+ *     tags: [AI & Insights]
+ *     security:
+ *       - cookieAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: start
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *       - in: query
+ *         name: end
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *     responses:
+ *       200:
+ *         description: Days with workouts and their entry counts.
+ *       400:
+ *         description: Validation error (bad dates, or a range over 366 days).
+ */
+const getWorkoutDaysHandler: RequestHandler = async (req, res, next) => {
+  try {
+    // Same 366-day bounded day range as hydration-nutrition-range.
+    const queryResult = HydrationNutritionRangeQuerySchema.safeParse(req.query);
+    if (!queryResult.success) {
+      res.status(400).json({
+        error: 'Validation error',
+        details: queryResult.error.flatten().fieldErrors,
+      });
+      return;
+    }
+    const { start, end } = queryResult.data;
+    const days = await exerciseEntryRepository.getWorkoutDayCounts(
+      req.userId,
+      start,
+      end
+    );
+    const body: WorkoutDaysResponse = { days };
+    res.status(200).json(body);
+  } catch (error: unknown) {
+    next(error);
+  }
+};
+
+router.get('/workout-days', getWorkoutDaysHandler);
 
 export default router;

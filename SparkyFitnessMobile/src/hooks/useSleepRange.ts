@@ -4,6 +4,7 @@ import { ApiError } from '../services/api/errors';
 import { fetchSleepEntries } from '../services/api/sleepApi';
 import { RANGE_DAYS, type HealthTrendDateRange } from '../types/healthTrends';
 import {
+  isPlottedSleepStage,
   laneForStageType,
   type SleepEntry,
   type SleepStageEvent,
@@ -87,6 +88,7 @@ const mergeAdjacentSegments = (
  */
 const buildSessionSegments = (entry: SleepEntry): SleepTimelineSegment[] => {
   const stageSegments = entry.stage_events
+    .filter((stage) => isPlottedSleepStage(stage.stage_type))
     .map(toSegment)
     .filter((segment): segment is SleepTimelineSegment => segment !== null)
     .sort((first, second) => first.startMs - second.startMs);

@@ -14,7 +14,7 @@ import { EnergyUnit } from '@/contexts/PreferencesContext';
 import { useActiveUser } from '@/contexts/ActiveUserContext';
 import { formatServingLabel } from '@/utils/foodServing';
 import { resolveFoodImageSrc, usableFoodImages } from '@/utils/foodImages';
-import ImageLightbox from './ImageLightbox';
+import ImageLightbox from '@/components/ImageLightbox';
 import {
   CONFIDENCE_TONES,
   OVERALL_CONFIDENCE_LABELS,

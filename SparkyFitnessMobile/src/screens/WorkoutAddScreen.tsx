@@ -53,6 +53,7 @@ import type {
   CreatePresetSessionRequest,
   UpdatePresetSessionRequest,
 } from '@workspace/shared';
+import { buildExerciseReplaceContext } from '../utils/exerciseReplace';
 
 type Props = RootStackScreenProps<'WorkoutAdd'>;
 
@@ -265,9 +266,15 @@ const WorkoutAddScreen: React.FC<Props> = ({ navigation, route }) => {
   const handleReplaceExercise = useCallback(
     (clientId: string) => {
       setReplaceTarget(clientId);
-      navigation.navigate('ExerciseSearch', { returnKey: route.key });
+      navigation.navigate('ExerciseSearch', {
+        returnKey: route.key,
+        replaceFor: buildExerciseReplaceContext(
+          state.exercises.find((e) => e.clientId === clientId),
+          state.exercises
+        ),
+      });
     },
-    [setReplaceTarget, navigation, route.key]
+    [setReplaceTarget, navigation, route.key, state.exercises]
   );
 
   const handleCancel = useCallback(async () => {

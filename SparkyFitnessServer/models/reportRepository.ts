@@ -575,6 +575,7 @@ async function getExerciseEntries(
          ee.level AS exercise_level,
          ee.force AS exercise_force,
          ee.mechanic AS exercise_mechanic,
+         COALESCE(epe.workout_format, 'standard') AS workout_format,
          COALESCE(
            (SELECT json_agg(set_data ORDER BY set_data.set_number)
             FROM (
@@ -585,6 +586,7 @@ async function getExerciseEntries(
            ), '[]'::json
          ) AS sets
        FROM exercise_entries ee
+       LEFT JOIN exercise_preset_entries epe ON ee.exercise_preset_entry_id = epe.id
        WHERE ee.user_id = $1 AND ee.entry_date BETWEEN $2 AND $3`;
     const params: (string | number)[] = [userId, startDate, endDate];
     let paramIndex = 4;

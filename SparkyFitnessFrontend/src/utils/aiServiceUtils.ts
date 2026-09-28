@@ -22,6 +22,10 @@ export const getServiceTypes = (t: (key: string) => string): ServiceType[] => [
     label: t('settings.aiService.serviceTypes.openrouter'),
   },
   { value: 'xai', label: t('settings.aiService.serviceTypes.xai') },
+  {
+    value: 'perplexity',
+    label: t('settings.aiService.serviceTypes.perplexity'),
+  },
   { value: 'meta', label: t('settings.aiService.serviceTypes.meta') },
   { value: 'custom', label: t('settings.aiService.serviceTypes.custom') },
 ];
@@ -93,6 +97,8 @@ export const getModelOptions = (serviceType: string): string[] => {
         'anthropic/claude-haiku-4.5',
         'anthropic/claude-sonnet-4.6',
         'deepseek/deepseek-chat',
+        'perplexity/sonar',
+        'perplexity/sonar-pro',
         'meta-llama/llama-3.1-8b-instruct:free',
       ];
     case 'xai':
@@ -105,6 +111,8 @@ export const getModelOptions = (serviceType: string): string[] => {
         'grok-4.20-0309-reasoning',
         'grok-build-0.1',
       ];
+    case 'perplexity':
+      return ['sonar', 'sonar-pro', 'sonar-reasoning'];
     case 'meta':
       // Meta Superintelligence Labs' Muse Spark, served over an
       // OpenAI-compatible Chat Completions API. One published model for now.

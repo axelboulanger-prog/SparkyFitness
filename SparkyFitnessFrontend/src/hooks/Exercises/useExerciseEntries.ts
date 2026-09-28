@@ -11,6 +11,7 @@ import {
   deleteExercisePresetEntry,
   fetchExerciseDetails,
   getExerciseHistory,
+  fetchWorkoutLocations,
 } from '@/api/Exercises/exerciseEntryService';
 import { exerciseEntryKeys, exerciseKeys } from '@/api/keys/exercises';
 import i18n from '@/i18n';
@@ -27,6 +28,15 @@ export const useExerciseEntries = (date: string, userId?: string) => {
     enabled: !!date,
     staleTime: 0, // Always consider data stale so it refetches when needed
     refetchOnWindowFocus: true, // Refetch when user returns to the tab after a sync
+  });
+};
+
+/** Previously logged gym / location names, most recent first. */
+export const useWorkoutLocations = () => {
+  return useQuery({
+    queryKey: exerciseEntryKeys.locations(),
+    queryFn: fetchWorkoutLocations,
+    staleTime: 60_000,
   });
 };
 
@@ -112,16 +122,21 @@ export const useLogWorkoutPresetMutation = () => {
     mutationFn: ({
       presetId,
       date,
+      workoutPlanAssignmentId,
     }: {
       presetId: string | number;
       date: string;
-    }) => logWorkoutPreset(presetId, date),
+      workoutPlanAssignmentId?: number | string | null;
+    }) => logWorkoutPreset(presetId, date, workoutPlanAssignmentId),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({
         queryKey: exerciseEntryKeys.byDate(variables.date),
       });
       queryClient.invalidateQueries({
         queryKey: dailyProgressKeys.all,
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['workoutPlanTemplates'],
       });
     },
     meta: {
@@ -146,6 +161,7 @@ export const useCreatePresetSessionMutation = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: exerciseEntryKeys.all });
       queryClient.invalidateQueries({ queryKey: dailyProgressKeys.all });
+      queryClient.invalidateQueries({ queryKey: ['workoutPlanTemplates'] });
     },
     meta: {
       successMessage: t(
@@ -171,6 +187,7 @@ export const useDeleteExercisePresetEntryMutation = () => {
       queryClient.invalidateQueries({
         queryKey: dailyProgressKeys.all,
       });
+      queryClient.invalidateQueries({ queryKey: ['workoutPlanTemplates'] });
     },
     meta: {
       successMessage: t(

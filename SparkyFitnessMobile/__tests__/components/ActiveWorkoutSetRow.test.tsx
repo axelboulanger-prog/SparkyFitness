@@ -8,6 +8,7 @@ import type {
   ExerciseRecentSessionSet,
 } from '@workspace/shared';
 import ActiveWorkoutSetRow, {
+  parseRirInput,
   parseRpeInput,
   type SetRowMode,
   type SetRowState,
@@ -136,6 +137,16 @@ function renderRow(overrides?: RenderOverrides) {
 function textColor(element: { props: { style: unknown } }) {
   return StyleSheet.flatten(element.props.style as any).color;
 }
+
+describe('parseRirInput', () => {
+  it('snaps to halves within 0-10 and treats blank as cleared', () => {
+    expect(parseRirInput('')).toBeNull();
+    expect(parseRirInput('0')).toBe(0);
+    expect(parseRirInput('2.3')).toBe(2.5);
+    expect(parseRirInput('14')).toBe(10);
+    expect(parseRirInput('abc')).toBeNull();
+  });
+});
 
 describe('parseRpeInput', () => {
   it('returns null for empty or non-numeric input', () => {

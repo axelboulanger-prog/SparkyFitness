@@ -65,7 +65,7 @@ import { cn } from '@/lib/utils';
 import AllergenBadges from '@/components/AllergenBadges';
 import { diaryEntryImages, usableFoodImages } from '@/utils/foodImages';
 import { useImageLightbox } from '@/hooks/Foods/useImageLightbox';
-import ImageLightbox from '@/components/FoodSearch/ImageLightbox';
+import ImageLightbox from '@/components/ImageLightbox';
 
 const MOBILE_ENTRY_NUTRIENT_LIMIT = 4;
 

@@ -79,7 +79,7 @@ import { formatServingLabel } from '@/utils/foodServing';
 import { usableFoodImages } from '@/utils/foodImages';
 import { MarkdownView } from '@/components/ui/MarkdownView';
 import { useImageLightbox } from '@/hooks/Foods/useImageLightbox';
-import ImageLightbox from '@/components/FoodSearch/ImageLightbox';
+import ImageLightbox from '@/components/ImageLightbox';
 import { useOpenFoodFactsContributionAvailability } from '@/hooks/Foods/useOpenFoodFactsContribution';
 import { isOpenFoodFactsContributionCandidate } from '@/utils/openFoodFactsContribution';
 import OpenFoodFactsContributionDialog from './OpenFoodFactsContributionDialog';

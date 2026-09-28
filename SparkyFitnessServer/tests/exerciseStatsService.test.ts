@@ -279,6 +279,25 @@ describe('exerciseStatsService', () => {
       expect(res.items[0].formattedPace).toBe('4:59 /km');
       expect(mockClient.release).toHaveBeenCalled();
     });
+
+    it('does not treat a crunch or a strength session as cardio', async () => {
+      mockClient.query.mockResolvedValueOnce({ rows: [{ count: '0' }] });
+      mockClient.query.mockResolvedValueOnce({ rows: [] });
+
+      await exerciseStatsService.queryExerciseActivities('user-123', {
+        page: 1,
+        pageSize: 10,
+        sortBy: 'entry_date',
+        sortOrder: 'desc',
+        unitSystem: 'metric',
+      });
+
+      const sql = String(mockClient.query.mock.calls[0]?.[0]);
+      expect(sql).toContain("<> 'weight_reps'");
+      expect(sql).toContain('\\m(strength|crunch');
+      expect(sql).not.toContain('(run|walk|cycle');
+      expect(sql).toContain('OR COALESCE(distance, 0) > 0');
+    });
   });
 
   describe('getPersonalRecordMatrix', () => {

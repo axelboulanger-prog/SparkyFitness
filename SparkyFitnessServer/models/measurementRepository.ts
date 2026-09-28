@@ -2066,17 +2066,19 @@ async function getWaterIntakeLogEntryOwnerId(id: string, userId: string) {
 async function updateWaterIntakeLogTime(
   id: string,
   userId: string,
-  loggedAt: string
+  loggedAt: string,
+  client?: PoolClient
 ) {
-  const client = await getClient(userId);
+  const ownClient = !client;
+  const activeClient = client ?? (await getClient(userId));
   try {
-    const result = await client.query(
+    const result = await activeClient.query(
       'UPDATE water_intake_entries SET logged_at = $1 WHERE id = $2 AND user_id = $3 RETURNING *',
       [loggedAt, id, userId]
     );
     return result.rows[0] || null;
   } finally {
-    client.release();
+    if (ownClient) activeClient.release();
   }
 }
 

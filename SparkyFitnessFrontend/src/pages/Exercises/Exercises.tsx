@@ -18,6 +18,7 @@ import {
   CheckSquare,
   X,
   Edit,
+  Copy,
   Trash2,
   Share2,
   Lock,
@@ -37,6 +38,7 @@ import {
 import { usePreferences } from '@/contexts/PreferencesContext';
 import { useAuth } from '@/hooks/useAuth';
 import type { ExerciseOwnershipFilter } from '@/types/exercises';
+import { localizeMuscle, localizeEquipment } from '@/utils/exerciseTaxonomy';
 import WorkoutPresetsManager from './WorkoutPresetsManager';
 import WorkoutPlansManager from '@/pages/Exercises/WorkoutPlansManager';
 import {
@@ -321,13 +323,17 @@ const ExerciseDatabaseManager = () => {
                 exercise.primary_muscles.length > 0 && (
                   <div className="text-[10px] text-gray-500 truncate max-w-[150px]">
                     <span className="font-medium">Muscles: </span>
-                    {exercise.primary_muscles.join(', ')}
+                    {exercise.primary_muscles
+                      .map((m) => localizeMuscle(t, m))
+                      .join(', ')}
                   </div>
                 )}
               {exercise.equipment && exercise.equipment.length > 0 && (
                 <div className="text-[10px] text-gray-500 truncate max-w-[150px]">
                   <span className="font-medium">Equipment: </span>
-                  {exercise.equipment.join(', ')}
+                  {exercise.equipment
+                    .map((eq) => localizeEquipment(t, eq))
+                    .join(', ')}
                 </div>
               )}
             </div>
@@ -359,6 +365,17 @@ const ExerciseDatabaseManager = () => {
                 >
                   <Edit className="mr-2 h-4 w-4" />
                   {t('common.edit', 'Edit')}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() =>
+                    editForm.openDuplicateDialog(
+                      exercise,
+                      t('exercise.databaseManager.copySuffix', '(copy)')
+                    )
+                  }
+                >
+                  <Copy className="mr-2 h-4 w-4" />
+                  {t('exercise.databaseManager.duplicateExercise', 'Duplicate')}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   disabled={!isOwned}

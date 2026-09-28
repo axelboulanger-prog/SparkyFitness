@@ -105,6 +105,29 @@ describe('getGroupedExerciseSessionByIdWithClient superset_group', () => {
       1,
       null,
     ]);
+    const childSql = client.query.mock.calls
+      .map((call) => String(call[0]))
+      .find((sql) => sql.includes('FROM exercise_entries ee'));
+    expect(childSql).toBeDefined();
+    expect(childSql).not.toContain('FOR UPDATE');
+  });
+
+  it('locks child rows only when the caller asks', async () => {
+    const client = makeClient([
+      makeChildRow('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 0, null),
+    ]);
+
+    await getGroupedExerciseSessionByIdWithClient(
+      client,
+      USER_ID,
+      PRESET_ENTRY_ID,
+      true
+    );
+
+    const childSql = client.query.mock.calls
+      .map((call) => String(call[0]))
+      .find((sql) => sql.includes('FROM exercise_entries ee'));
+    expect(childSql).toContain('FOR UPDATE OF ee');
   });
 
   it('maps rows without the column to superset_group null', async () => {

@@ -30,9 +30,14 @@ interface UploadedFitFile {
 }
 
 interface PersistedFitEntry {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  entry: any;
+  entry: { id: string; [key: string]: unknown };
   operation: 'created' | 'updated';
+}
+
+export interface FitBufferImportOptions {
+  source?: string; // 'garmin_fit' (default) | 'coros_mcp'
+  sourceIdOverride?: string; // COROS: the labelId
+  notesLabel?: string; // COROS: 'Logged from COROS'
 }
 
 /**
@@ -44,7 +49,8 @@ async function persistFitEntry(
   actingUserId: string,
   entryData: FitEntryData & { exercise_id: string; entry_date: string },
   detailData: FitDetailData,
-  entryDate: string
+  entryDate: string,
+  source = FIT_SOURCE
 ): Promise<PersistedFitEntry> {
   const client = await getClient(targetUserId, actingUserId);
   try {
@@ -55,17 +61,17 @@ async function persistFitEntry(
         targetUserId,
         entryData,
         actingUserId,
-        FIT_SOURCE
+        source
       );
     await activityDetailsRepository._deleteActivityDetailsByEntryIdAndProviderWithClient(
       client,
       targetUserId,
       entry.id,
-      FIT_SOURCE
+      source
     );
     await activityDetailsRepository._createActivityDetailWithClient(client, {
       exercise_entry_id: entry.id,
-      provider_name: FIT_SOURCE,
+      provider_name: source,
       detail_type: 'full_activity_data',
       detail_data: detailData,
       created_by_user_id: actingUserId,
@@ -131,21 +137,18 @@ async function persistFitEntry(
   }
 }
 
-async function importSingleFitFile(
+/**
+ * Imports a single in-memory FIT buffer as an exercise diary entry with full telemetry.
+ */
+export async function importFitBuffer(
   targetUserId: string,
   actingUserId: string,
-  file: UploadedFitFile
+  buffer: Buffer,
+  fileName: string,
+  options?: FitBufferImportOptions
 ): Promise<ImportFitFileResult> {
-  const fileName = file.originalname;
   try {
-    if (!fileName.toLowerCase().endsWith('.fit')) {
-      return {
-        fileName,
-        status: 'failed',
-        reason: 'Only .fit files are supported.',
-      };
-    }
-    const decoded = decodeFitBuffer(file.buffer);
+    const decoded = decodeFitBuffer(buffer);
     if (!decoded.isFit) {
       return { fileName, status: 'failed', reason: 'Not a FIT file.' };
     }
@@ -156,7 +159,11 @@ async function importSingleFitFile(
         reason: `Could not decode file: ${decoded.errors.join('; ') || 'unknown decode error'}`,
       };
     }
-    const transformed = transformFitActivity(decoded.messages, file.buffer);
+    const transformed = transformFitActivity(
+      decoded.messages,
+      buffer,
+      options?.notesLabel
+    );
     if (!transformed.ok) {
       return { fileName, status: 'failed', reason: transformed.reason };
     }
@@ -183,16 +190,21 @@ async function importSingleFitFile(
       transformed.sport
     );
 
+    const source = options?.source || FIT_SOURCE;
+    const sourceId = options?.sourceIdOverride || transformed.sourceId;
+
     const { entry, operation } = await persistFitEntry(
       targetUserId,
       actingUserId,
       {
         ...transformed.entryData,
+        source_id: sourceId,
         exercise_id: exercise.id,
         entry_date: entryDate,
       },
       transformed.detailData,
-      entryDate
+      entryDate,
+      source
     );
 
     const result: ImportFitFileResult = {
@@ -210,7 +222,7 @@ async function importSingleFitFile(
   } catch (error) {
     log(
       'error',
-      `[fitImportService] Failed to import FIT file "${fileName}" for user ${targetUserId}:`,
+      `[fitImportService] Failed to import FIT buffer "${fileName}" for user ${targetUserId}:`,
       error
     );
     return {
@@ -222,6 +234,22 @@ async function importSingleFitFile(
           : 'Unexpected error importing file.',
     };
   }
+}
+
+async function importSingleFitFile(
+  targetUserId: string,
+  actingUserId: string,
+  file: UploadedFitFile
+): Promise<ImportFitFileResult> {
+  const fileName = file.originalname;
+  if (!fileName.toLowerCase().endsWith('.fit')) {
+    return {
+      fileName,
+      status: 'failed',
+      reason: 'Only .fit files are supported.',
+    };
+  }
+  return importFitBuffer(targetUserId, actingUserId, file.buffer, fileName);
 }
 
 /**
@@ -251,4 +279,4 @@ async function importFitFiles(
 }
 
 export { importFitFiles };
-export default { importFitFiles };
+export default { importFitFiles, importFitBuffer };

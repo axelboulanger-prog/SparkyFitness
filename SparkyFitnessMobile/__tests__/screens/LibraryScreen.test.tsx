@@ -359,6 +359,12 @@ describe('LibraryScreen', () => {
     expect(navigation.navigate).toHaveBeenCalledWith('WorkoutPresetsLibrary');
   });
 
+  it('navigates to ExerciseStatistics when the Exercise statistics row is pressed', () => {
+    const screen = renderScreen();
+    fireEvent.press(screen.getByText('Exercise statistics'));
+    expect(navigation.navigate).toHaveBeenCalledWith('ExerciseStatistics');
+  });
+
   it('navigates to MedicationsList when the Medications row is pressed', () => {
     const screen = renderScreen();
     fireEvent.press(screen.getByText('Medications'));

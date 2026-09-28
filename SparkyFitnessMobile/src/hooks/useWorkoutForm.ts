@@ -169,6 +169,7 @@ export function workoutFormReducer(
             duration: set.duration,
             notes: set.notes,
             rpe: set.rpe,
+            rir: set.rir ?? null,
             completedAt: set.completed_at,
             isPr: set.is_pr,
             weight:

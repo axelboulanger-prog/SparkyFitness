@@ -25,6 +25,7 @@ import { loadUserTimezone } from '../utils/timezoneLoader.js';
 import * as genericHealthRepository from '../models/genericHealthRepository.js';
 import {
   BUILT_IN_MOODS,
+  instantHourMinute,
   instantToDay,
   MAX_HEALTH_TOTAL_CALORIES_PER_DAY,
   MIN_MEASURED_BMR_KCAL,
@@ -1544,6 +1545,8 @@ async function persistWorkoutTelemetry(
         avg_power_watts: lap.avg_power_watts,
         elevation_gain_meters: lap.elevation_gain_meters,
         elevation_loss_meters: lap.elevation_loss_meters,
+        moving_time_seconds: lap.moving_time_seconds,
+        avg_moving_speed_mps: lap.avg_moving_speed_mps,
       }))
     );
   }
@@ -1601,6 +1604,17 @@ async function persistWorkoutTelemetry(
         window: minMax(times),
       }
     );
+  }
+}
+
+function localEntryTime(iso: string, tz: string): string | null {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms) || !tz) return null;
+  try {
+    const { hour, minute } = instantHourMinute(ms, tz);
+    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`;
+  } catch {
+    return null;
   }
 }
 
@@ -1664,6 +1678,15 @@ const workoutHandler: HealthTypeHandler = {
                   : set.duration,
           }))
         : rawSets;
+      // Indoor workouts have no route, so the heart-rate graph is the day's
+      // samples clipped to this start time. The phone already sends the
+      // instant; it just was not stored.
+      const { tz } = await ctx.getSleepContext();
+      const zone =
+        typeof entry.record_timezone === 'string' && entry.record_timezone
+          ? entry.record_timezone
+          : tz;
+      const entryTime = localEntryTime(ctx.entryTimestamp, zone);
       // Wearable telemetry (X-Workout-Model-Version 3+). All optional: a client
       // that sends none of it takes exactly the pre-telemetry path.
       const gpsPoints = sanitizeGpsPoints(entry.gps_points);
@@ -1681,6 +1704,11 @@ const workoutHandler: HealthTypeHandler = {
           duration_minutes: duration ? duration / 60 : 0,
           calories_burned: caloriesBurned,
           entry_date: ctx.parsedDate,
+          // The zone travels with entry_time so a later read converts it
+          // back in the zone it was taken in, not the viewer's current one.
+          ...(entryTime
+            ? { entry_time: entryTime, record_timezone: zone }
+            : {}),
           notes: `Source: ${source}, Activity Type: ${activityType}`,
           distance: distance,
           sets, // Pass sets if present for mobile workout sync
