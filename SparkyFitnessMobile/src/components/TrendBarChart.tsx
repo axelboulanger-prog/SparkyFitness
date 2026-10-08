@@ -47,8 +47,9 @@ type TrendBarChartProps<TPoint extends { day: string }> = {
   errorText: string;
   emptyText: string;
   testIDPrefix: string;
-  /** The user's goal for this stat, already projected onto the same value `getValue` plots. */
-  goalValue?: number | null;
+  /** The resolved goal for each day in `data`, same order, already projected onto the
+   * same value `getValue` plots. */
+  goalValues?: (number | null)[];
 };
 
 const INNER_PADDING: Record<HealthTrendDateRange, number> = {
@@ -89,7 +90,7 @@ function TrendBarChart<TPoint extends { day: string }>({
   errorText,
   emptyText,
   testIDPrefix,
-  goalValue,
+  goalValues,
 }: TrendBarChartProps<TPoint>) {
   const { t } = useTranslation();
   const [accentColor, textMuted] = useCSSVariable([
@@ -115,12 +116,13 @@ function TrendBarChart<TPoint extends { day: string }>({
   // 500 ml increments) instead of whatever fraction the data or a goal happens to fall on.
   const yAxisScale = useMemo(() => {
     const dataMax = Math.max(0, ...chartData.map((point) => point.value));
+    const positiveGoals = (goalValues ?? []).filter(
+      (value): value is number => value != null && value > 0
+    );
     const effectiveMax =
-      goalValue != null && goalValue > 0
-        ? Math.max(dataMax, goalValue)
-        : dataMax;
+      positiveGoals.length > 0 ? Math.max(dataMax, ...positiveGoals) : dataMax;
     return computeNiceYAxisScale(0, effectiveMax);
-  }, [chartData, goalValue]);
+  }, [chartData, goalValues]);
 
   const domain = useMemo(
     () => ({ y: [yAxisScale.min, yAxisScale.max] as [number, number] }),
@@ -241,9 +243,10 @@ function TrendBarChart<TPoint extends { day: string }>({
                   roundedCorners={{ topLeft: 6, topRight: 6 }}
                 />
                 <TrendGoalLine
+                  points={points.value}
                   chartBounds={chartBounds}
                   yScale={yScale}
-                  goal={goalValue}
+                  goals={goalValues ?? []}
                   color={textMuted}
                 />
               </>

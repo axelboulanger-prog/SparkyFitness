@@ -1,4 +1,5 @@
 import ExpoModulesCore
+import HealthKit
 import Security
 import WatchConnectivity
 
@@ -18,10 +19,59 @@ private class WatchSessionDelegateHandler: NSObject, WCSessionDelegate {
     var onWaterDelete: (([String: Any]) -> Void)?
     /// One set logged during an active workout on the watch.
     var onSetCompleted: (([String: Any]) -> Void)?
+    var onRestChanged: (([String: Any]) -> Void)?
+    /// The wearer started a set's hold countdown or stopwatch on the watch.
+    var onSetTimerStarted: (([String: Any]) -> Void)?
+    var onSetTimerStopped: (([String: Any]) -> Void)?
     /// A batch of heart-rate samples for one exercise, captured on the watch.
     var onHeartRateBatch: (([String: Any]) -> Void)?
+    /// The reading on the wrist now. Live messages only, never queued.
+    var onLiveHeartRate: (([String: Any]) -> Void)?
     /// The wearer ended the workout on the watch.
     var onWorkoutStop: (([String: Any]) -> Void)?
+    var onWorkoutDiscard: (([String: Any]) -> Void)?
+    /// The wearer picked a saved workout on the watch. The phone starts it.
+    var onWorkoutStartRequested: (([String: Any]) -> Void)?
+
+    /// The newest `setTargets` update sent before the session finished
+    /// activating. Apple only queues `transferUserInfo` on an activated
+    /// session, and the phone treats an update as sent, so it is held here
+    /// and queued on activation. Each update is a full snapshot, so only the
+    /// latest one matters.
+    private var heldSetTargets: [String: Any]?
+    /// The newest `workoutPlanUpdate`, held the same way and for the same
+    /// reason. Also a full snapshot, so only the latest matters; queued ahead
+    /// of held targets on activation, since those may name its new sets.
+    private var heldPlanUpdate: [String: Any]?
+    private let heldLock = NSLock()
+
+    /// Queues `payload` now if the session is activated, else holds it for
+    /// `activationDidCompleteWith`.
+    func transferSetTargets(_ payload: [String: Any]) {
+        transferOrHold(payload, into: \.heldSetTargets)
+    }
+
+    /// As `transferSetTargets`, for a plan update.
+    func transferPlanUpdate(_ payload: [String: Any]) {
+        transferOrHold(payload, into: \.heldPlanUpdate)
+    }
+
+    private func transferOrHold(
+        _ payload: [String: Any],
+        into slot: ReferenceWritableKeyPath<WatchSessionDelegateHandler, [String: Any]?>
+    ) {
+        heldLock.lock()
+        defer { heldLock.unlock() }
+        guard WCSession.default.activationState == .activated else {
+            self[keyPath: slot] = payload
+            return
+        }
+        self[keyPath: slot] = nil
+        WCSession.default.transferUserInfo(payload)
+        if WCSession.default.isReachable {
+            WCSession.default.sendMessage(payload, replyHandler: nil, errorHandler: nil)
+        }
+    }
 
     func activate() {
         guard WCSession.isSupported() else { return }
@@ -42,10 +92,22 @@ private class WatchSessionDelegateHandler: NSObject, WCSessionDelegate {
             onWaterDelete?(payload)
         case "setCompleted":
             onSetCompleted?(payload)
+        case "restChanged":
+            onRestChanged?(payload)
+        case "setTimerStarted":
+            onSetTimerStarted?(payload)
+        case "setTimerStopped":
+            onSetTimerStopped?(payload)
         case "heartRateBatch":
             onHeartRateBatch?(payload)
+        case "liveHeartRate":
+            onLiveHeartRate?(payload)
         case "workoutStop":
             onWorkoutStop?(payload)
+        case "workoutDiscard":
+            onWorkoutDiscard?(payload)
+        case "workoutStartRequested":
+            onWorkoutStartRequested?(payload)
         default:
             break
         }
@@ -58,6 +120,16 @@ private class WatchSessionDelegateHandler: NSObject, WCSessionDelegate {
         activationDidCompleteWith activationState: WCSessionActivationState,
         error: Error?
     ) {
+        if activationState == .activated {
+            heldLock.lock()
+            let plan = heldPlanUpdate
+            let targets = heldSetTargets
+            heldPlanUpdate = nil
+            heldSetTargets = nil
+            heldLock.unlock()
+            if let plan { session.transferUserInfo(plan) }
+            if let targets { session.transferUserInfo(targets) }
+        }
         onReachabilityChange?(session.isReachable)
     }
 
@@ -134,6 +206,23 @@ public class WatchConnectivityModule: Module {
     /// One serial queue so a drain and an ack can't interleave.
     private let heartRateAccess = DispatchQueue(label: "sparky.watch.heartRateQueue")
 
+    /// Opens the watch app for the workout the phone just started, the same
+    /// way the system Workout app does. Without it the queued plan waits
+    /// until the wearer opens the watch app by hand. watchOS only launches it
+    /// while the watch is on the wrist, unlocked and paired; otherwise this
+    /// quietly does nothing and the plan still arrives on the next open.
+    private static func launchWatchApp() {
+        guard HKHealthStore.isHealthDataAvailable(),
+              WCSession.isSupported(),
+              WCSession.default.isPaired,
+              WCSession.default.isWatchAppInstalled
+        else { return }
+        let configuration = HKWorkoutConfiguration()
+        configuration.activityType = .traditionalStrengthTraining
+        configuration.locationType = .indoor
+        HKHealthStore().startWatchApp(with: configuration) { _, _ in }
+    }
+
     public func definition() -> ModuleDefinition {
         Name("WatchConnectivity")
 
@@ -144,8 +233,14 @@ public class WatchConnectivityModule: Module {
             "onWaterIntake",
             "onWaterDelete",
             "onSetCompleted",
+            "onRestChanged",
+            "onSetTimerStarted",
+            "onSetTimerStopped",
             "onHeartRateBatch",
-            "onWorkoutStop"
+            "onLiveHeartRate",
+            "onWorkoutStop",
+            "onWorkoutDiscard",
+            "onWorkoutStartRequested"
         )
 
         OnCreate {
@@ -194,8 +289,51 @@ public class WatchConnectivityModule: Module {
                     // clearing a planned one — same rule as body fat above.
                     "weightKg": payload["weightKg"] as? Double,
                     "reps": payload["reps"] as? Double,
+                    "duration": (payload["duration"] as? NSNumber)?.intValue,
+                    "distanceKm": payload["distanceKm"] as? Double,
                     "completedAt": payload["completedAt"] as? String,
                 ])
+            }
+            self.delegateHandler.onSetTimerStarted = { [weak self] payload in
+                guard let startedAt = (payload["startedAt"] as? NSNumber)?.doubleValue else {
+                    return
+                }
+                var event: [String: Any] = [
+                    "sessionId": payload["sessionId"] as? String ?? "",
+                    "setId": payload["setId"] as? String ?? "",
+                    "startedAt": startedAt,
+                ]
+                if let armedAt = (payload["armedAt"] as? NSNumber)?.doubleValue {
+                    event["armedAt"] = armedAt
+                }
+                self?.sendEvent("onSetTimerStarted", event)
+            }
+            self.delegateHandler.onSetTimerStopped = { [weak self] payload in
+                guard let seconds = (payload["seconds"] as? NSNumber)?.intValue,
+                      let startedAt = (payload["startedAt"] as? NSNumber)?.doubleValue
+                else {
+                    return
+                }
+                self?.sendEvent("onSetTimerStopped", [
+                    "sessionId": payload["sessionId"] as? String ?? "",
+                    "setId": payload["setId"] as? String ?? "",
+                    "seconds": seconds,
+                    "startedAt": startedAt,
+                ])
+            }
+            self.delegateHandler.onRestChanged = { [weak self] payload in
+                // Epoch ms as Doubles, like the phone's own rest deadline.
+                // `endsAt` is absent when the rest was skipped on the watch.
+                var event: [String: Any] = [
+                    "sessionId": payload["sessionId"] as? String ?? "",
+                ]
+                if let previous = (payload["previousEndsAt"] as? NSNumber)?.doubleValue {
+                    event["previousEndsAt"] = previous
+                }
+                if let endsAt = (payload["endsAt"] as? NSNumber)?.doubleValue {
+                    event["endsAt"] = endsAt
+                }
+                self?.sendEvent("onRestChanged", event)
             }
             self.delegateHandler.onHeartRateBatch = { [weak self] payload in
                 guard let self else { return }
@@ -208,9 +346,35 @@ public class WatchConnectivityModule: Module {
                 }
                 self.sendEvent("onHeartRateBatch", event)
             }
+            self.delegateHandler.onLiveHeartRate = { [weak self] payload in
+                guard let bpm = (payload["bpm"] as? NSNumber)?.doubleValue,
+                      let at = (payload["at"] as? NSNumber)?.doubleValue
+                else { return }
+                self?.sendEvent("onLiveHeartRate", [
+                    "sessionId": payload["sessionId"] as? String ?? "",
+                    "exerciseEntryId": payload["exerciseEntryId"] as? String ?? "",
+                    "bpm": bpm,
+                    "at": at,
+                ])
+            }
             self.delegateHandler.onWorkoutStop = { [weak self] payload in
                 self?.sendEvent("onWorkoutStop", [
                     "sessionId": payload["sessionId"] as? String ?? "",
+                ])
+            }
+            self.delegateHandler.onWorkoutDiscard = { [weak self] payload in
+                var event: [String: Any] = [
+                    "sessionId": payload["sessionId"] as? String ?? "",
+                ]
+                if let armedAt = payload["armedAt"] as? Double {
+                    event["armedAt"] = armedAt
+                }
+                self?.sendEvent("onWorkoutDiscard", event)
+            }
+            self.delegateHandler.onWorkoutStartRequested = { [weak self] payload in
+                self?.sendEvent("onWorkoutStartRequested", [
+                    "presetId": payload["presetId"] as? String ?? "",
+                    "serverId": payload["serverId"] as? String ?? "",
                 ])
             }
             self.delegateHandler.activate()
@@ -271,6 +435,19 @@ public class WatchConnectivityModule: Module {
             if WCSession.default.isReachable {
                 WCSession.default.sendMessage(payload, replyHandler: nil, errorHandler: nil)
             }
+            Self.launchWatchApp()
+        }
+
+        /// The live workout's plan again, after an exercise, superset or set
+        /// was added, removed or regrouped on the phone. Same shape as
+        /// `startWorkout` plus a `revision`; the watch swaps the plan in
+        /// without restarting, and ignores a copy older than one it has.
+        /// Queued and sent now if reachable, for the same reasons as a start.
+        AsyncFunction("updateWorkoutPlan") { (plan: [String: Any]) -> Void in
+            guard WCSession.isSupported() else { return }
+            var payload = plan.compactMapValues(withoutNulls)
+            payload["type"] = "workoutPlanUpdate"
+            self.delegateHandler.transferPlanUpdate(payload)
         }
 
         /// Tells the watch the workout it was armed with is over, because it
@@ -279,12 +456,13 @@ public class WatchConnectivityModule: Module {
         /// has already closed — a dead workout on screen and the sensor
         /// still sampling. Queued like `startWorkout` for the same reason: a
         /// watch out of range must still hear it eventually.
-        AsyncFunction("stopWorkout") { (sessionId: String, stoppedAt: String) -> Void in
+        AsyncFunction("stopWorkout") { (sessionId: String, stoppedAt: String, discarded: Bool?) -> Void in
             guard WCSession.isSupported() else { return }
             let payload: [String: Any] = [
                 "type": "workoutStop",
                 "sessionId": sessionId,
                 "stoppedAt": stoppedAt,
+                "discarded": discarded ?? false,
             ]
             if WCSession.default.isReachable {
                 WCSession.default.sendMessage(payload, replyHandler: nil) { _ in
@@ -307,6 +485,16 @@ public class WatchConnectivityModule: Module {
             if WCSession.default.isReachable {
                 WCSession.default.sendMessage(payload, replyHandler: nil, errorHandler: nil)
             }
+        }
+
+        /// Current weight/reps targets for the live session's sets. Queued and
+        /// sent immediately like `updateIntervalTiming`; the watch keeps the
+        /// highest revision, so a late queued copy cannot undo a newer one.
+        AsyncFunction("updateSetTargets") { (update: [String: Any]) -> Void in
+            guard WCSession.isSupported() else { return }
+            var payload = update.compactMapValues(withoutNulls)
+            payload["type"] = "setTargets"
+            self.delegateHandler.transferSetTargets(payload)
         }
 
         /// The server config that owns batches queued from now on. Each batch

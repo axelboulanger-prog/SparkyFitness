@@ -1,7 +1,6 @@
 import measurementRepository from '../../models/measurementRepository.js';
 import exerciseEntryRepository from '../../models/exerciseEntry.js';
 import exerciseRepository from '../../models/exercise.js';
-import activityDetailsRepository from '../../models/activityDetailsRepository.js';
 import sleepRepository from '../../models/sleepRepository.js';
 import { log } from '../../config/logging.js';
 import {
@@ -856,21 +855,24 @@ async function processGoogleActivities(
       ],
     };
 
-    const newEntry = await exerciseEntryRepository.createExerciseEntry(
+    // Written with the entry so a re-sync replaces the detail instead of
+    // adding another copy.
+    await exerciseEntryRepository.createExerciseEntry(
       userId,
       entryData,
       createdByUserId,
-      'Google Health'
+      'Google Health',
+      null,
+      {
+        activityDetail: {
+          provider_name: 'Google Health',
+          detail_type: 'full_activity_data',
+          detail_data: point,
+          created_by_user_id: String(createdByUserId),
+          updated_by_user_id: String(createdByUserId),
+        },
+      }
     );
-    if (newEntry?.id) {
-      await activityDetailsRepository.createActivityDetail(userId, {
-        exercise_entry_id: newEntry.id,
-        provider_name: 'Google Health',
-        detail_type: 'full_activity_data',
-        detail_data: point,
-        created_by_user_id: createdByUserId,
-      });
-    }
   }
 }
 

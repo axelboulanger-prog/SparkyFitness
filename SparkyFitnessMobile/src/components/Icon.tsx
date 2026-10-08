@@ -147,6 +147,7 @@ const ICON_MAP = {
   'dashboard-settings': { sf: 'square.grid.2x2', ion: 'grid-outline' },
   'diary-settings': { sf: 'book', ion: 'book-outline' },
   'workout-settings': { sf: 'dumbbell', ion: 'barbell-outline' },
+  'watch-settings': { sf: 'applewatch', ion: 'watch-outline' },
   'app-settings': { sf: 'slider.horizontal.3', ion: 'options-outline' },
   logs: { sf: 'doc.plaintext', ion: 'document-text-outline' },
   about: { sf: 'info.circle', ion: 'information-circle-outline' },
@@ -173,6 +174,7 @@ const ICON_MAP = {
   'wellness-filled': { sf: 'leaf.fill', ion: 'leaf' },
   medication: { sf: 'pills', ion: 'medkit-outline' },
   calendar: { sf: 'calendar', ion: 'calendar-outline' },
+  symptoms: { sf: 'cross.case', ion: 'medkit-outline' },
 
   // Sleep
   'sleep-wake-up': { sf: 'alarm.fill', ion: 'alarm' },

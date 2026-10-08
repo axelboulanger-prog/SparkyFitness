@@ -16,6 +16,7 @@ import {
 import {
   cancelScheduledNotification,
   scheduleFastGoalNotification,
+  scheduleFastPreEndNotification,
 } from '../services/notifications';
 import { addLog } from '../services/LogService';
 import { useAppPreferencesStore } from '../stores/appPreferencesStore';
@@ -154,6 +155,7 @@ interface StoredGoalNotification {
   fastId: string;
   target: string | null;
   notificationId: string;
+  preEndNotificationId?: string | null;
   language?: string | null;
 }
 
@@ -164,14 +166,19 @@ async function readStoredGoalNotification(): Promise<StoredGoalNotification | nu
     const parsed = JSON.parse(raw) as Partial<StoredGoalNotification>;
     if (
       typeof parsed?.fastId === 'string' &&
-      typeof parsed?.notificationId === 'string'
+      (typeof parsed?.notificationId === 'string' ||
+        typeof parsed?.preEndNotificationId === 'string')
     ) {
       return {
         fastId: parsed.fastId,
         // `target` was added later; a missing/invalid value reads as null so an
         // upgraded record is treated as stale and rescheduled, not orphaned.
         target: typeof parsed.target === 'string' ? parsed.target : null,
-        notificationId: parsed.notificationId,
+        notificationId: parsed.notificationId ?? '',
+        preEndNotificationId:
+          typeof parsed.preEndNotificationId === 'string'
+            ? parsed.preEndNotificationId
+            : null,
         language: typeof parsed.language === 'string' ? parsed.language : null,
       };
     }
@@ -182,9 +189,15 @@ async function readStoredGoalNotification(): Promise<StoredGoalNotification | nu
 }
 
 async function clearStoredGoalNotification(
-  notificationId: string | null
+  notificationId: string | null,
+  preEndNotificationId?: string | null
 ): Promise<void> {
-  await cancelScheduledNotification(notificationId);
+  if (notificationId) {
+    await cancelScheduledNotification(notificationId);
+  }
+  if (preEndNotificationId) {
+    await cancelScheduledNotification(preEndNotificationId);
+  }
   try {
     await AsyncStorage.removeItem(GOAL_NOTIF_STORAGE_KEY);
   } catch {
@@ -195,7 +208,12 @@ async function clearStoredGoalNotification(
 /** Cancels and forgets any scheduled goal notification. */
 export async function cancelFastGoalNotification(): Promise<void> {
   const stored = await readStoredGoalNotification();
-  if (stored) await clearStoredGoalNotification(stored.notificationId);
+  if (stored) {
+    await clearStoredGoalNotification(
+      stored.notificationId,
+      stored.preEndNotificationId
+    );
+  }
 }
 
 /**
@@ -215,15 +233,27 @@ export async function reconcileFastGoalNotification(
   try {
     let stored = await readStoredGoalNotification();
 
-    // No active fast → cancel any scheduled goal notification.
-    if (!currentFast || currentFast.status !== 'ACTIVE') {
-      if (stored) await clearStoredGoalNotification(stored.notificationId);
+    // No active fast or currently in eating window → cancel any scheduled goal notification.
+    if (
+      !currentFast ||
+      currentFast.status !== 'ACTIVE' ||
+      currentFast.is_eating_window
+    ) {
+      if (stored) {
+        await clearStoredGoalNotification(
+          stored.notificationId,
+          stored.preEndNotificationId
+        );
+      }
       return;
     }
 
     // A stored notification belonging to a different fast is stale — drop it.
     if (stored && stored.fastId !== currentFast.id) {
-      await clearStoredGoalNotification(stored.notificationId);
+      await clearStoredGoalNotification(
+        stored.notificationId,
+        stored.preEndNotificationId
+      );
       stored = null;
     }
 
@@ -232,7 +262,12 @@ export async function reconcileFastGoalNotification(
     // Elapsed-only fast (no goal) → never schedule; drop a lingering id if the
     // target was cleared on this same fast.
     if (!target) {
-      if (stored) await clearStoredGoalNotification(stored.notificationId);
+      if (stored) {
+        await clearStoredGoalNotification(
+          stored.notificationId,
+          stored.preEndNotificationId
+        );
+      }
       return;
     }
 
@@ -243,7 +278,10 @@ export async function reconcileFastGoalNotification(
       stored &&
       (stored.target !== target || stored.language !== (language ?? null))
     ) {
-      await clearStoredGoalNotification(stored.notificationId);
+      await clearStoredGoalNotification(
+        stored.notificationId,
+        stored.preEndNotificationId
+      );
       stored = null;
     }
 
@@ -254,14 +292,18 @@ export async function reconcileFastGoalNotification(
     if (schedulingLock.has(currentFast.id)) return;
     schedulingLock.add(currentFast.id);
     try {
-      const notificationId = await scheduleFastGoalNotification(target);
-      if (notificationId) {
+      const [notificationId, preEndNotificationId] = await Promise.all([
+        scheduleFastGoalNotification(target),
+        scheduleFastPreEndNotification(target, 30),
+      ]);
+      if (notificationId || preEndNotificationId) {
         await AsyncStorage.setItem(
           GOAL_NOTIF_STORAGE_KEY,
           JSON.stringify({
             fastId: currentFast.id,
             target,
-            notificationId,
+            notificationId: notificationId ?? '',
+            preEndNotificationId: preEndNotificationId ?? null,
             ...(language !== undefined ? { language } : {}),
           })
         );
@@ -311,6 +353,7 @@ export function useFastingGoalReconciler(
     currentFast?.id,
     currentFast?.target_end_time,
     currentFast?.status,
+    currentFast?.is_eating_window,
     appLocale,
   ]);
 

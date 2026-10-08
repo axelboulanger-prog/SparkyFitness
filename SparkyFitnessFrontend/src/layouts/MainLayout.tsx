@@ -24,6 +24,7 @@ import {
   Salad, // Used for Food Log
   BookOpen, // Used for the docs link
   Languages, // Used for the translation link
+  HeartPulse, // Used for the delegate-only Symptoms page
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
@@ -47,6 +48,8 @@ import { useCurrentVersionQuery } from '@/hooks/useGeneralQueries';
 import { useCycleSettings } from '@/hooks/useCycle';
 import { cn } from '@/lib/utils';
 import { getGridClassNormal } from '@/utils/layout';
+
+const SHOW_SPONSOR_BUTTON = false;
 
 interface AddCompItem {
   value: string;
@@ -284,6 +287,18 @@ const MainLayout: React.FC<MainLayoutProps> = ({
           icon: Pill,
         });
       }
+      // Owners and check-in delegates reach symptoms from the Check-in page; a
+      // delegate who may track symptoms but not check-ins gets their own entry.
+      if (
+        hasWritePermission('can_manage_symptoms') &&
+        !hasWritePermission('checkin')
+      ) {
+        tabs.push({
+          value: '/symptoms',
+          label: t('nav.symptoms', 'Symptoms'),
+          icon: HeartPulse,
+        });
+      }
     }
     if (user?.role === 'admin' && !isActingOnBehalf) {
       tabs.push({ value: '/admin', label: t('nav.admin'), icon: Shield });
@@ -344,6 +359,16 @@ const MainLayout: React.FC<MainLayoutProps> = ({
           value: '/medications',
           label: t('nav.medications', 'Medications'),
           icon: Pill,
+        });
+      }
+      if (
+        hasWritePermission('can_manage_symptoms') &&
+        !hasWritePermission('checkin')
+      ) {
+        mobileTabs.push({
+          value: '/symptoms',
+          label: t('nav.symptoms', 'Symptoms'),
+          icon: HeartPulse,
         });
       }
     }
@@ -461,7 +486,9 @@ const MainLayout: React.FC<MainLayoutProps> = ({
             {!isMobile && (
               <>
                 <GitHubStarCounter owner="CodeWithCJ" repo="SparkyFitness" />
-                <GitHubSponsorButton owner="CodeWithCJ" />
+                {SHOW_SPONSOR_BUTTON && (
+                  <GitHubSponsorButton owner="CodeWithCJ" />
+                )}
                 <HeaderLinkPill
                   href="https://codewithcj.github.io/SparkyFitness/"
                   label={t('layout.docs', 'Docs')}
@@ -623,7 +650,9 @@ const MainLayout: React.FC<MainLayoutProps> = ({
           <div className="flex flex-col items-center gap-2 mb-14">
             <div className="flex flex-wrap justify-center gap-2">
               <GitHubStarCounter owner="CodeWithCJ" repo="SparkyFitness" />
-              <GitHubSponsorButton owner="CodeWithCJ" />
+              {SHOW_SPONSOR_BUTTON && (
+                <GitHubSponsorButton owner="CodeWithCJ" />
+              )}
               <HeaderLinkPill
                 href="https://codewithcj.github.io/SparkyFitness/"
                 label={t('layout.docs', 'Docs')}

@@ -19,6 +19,7 @@ import { foodKeys, mealKeys } from '@/api/keys/meals';
 import { userAiConfigKeys } from '@/api/keys/admin';
 import { goalKeys } from '@/api/keys/goals';
 import { reportKeys } from '@/api/keys/reports';
+import { fastingKeys } from '@/api/keys/fasting';
 
 export const useDiaryInvalidation = () => {
   const queryClient = useQueryClient();
@@ -42,6 +43,7 @@ export const useDiaryInvalidation = () => {
     queryClient.invalidateQueries({ queryKey: goalKeys.all });
     queryClient.invalidateQueries({ queryKey: reportKeys.all });
     queryClient.invalidateQueries({ queryKey: ['workoutPlanTemplates'] });
+    queryClient.invalidateQueries({ queryKey: fastingKeys.all });
   }, [queryClient]);
 };
 
@@ -73,6 +75,10 @@ export const useFoodEntryInvalidation = () => {
     // editing a coffee moves the whole curve, and its query is keyed by date
     // rather than by entry, so nothing else would refresh it.
     queryClient.invalidateQueries({ queryKey: caffeineKeys.all });
+    // Fasting auto-calculation and check-in measurements/status derive from food logs.
+    // Logging or updating foods directly shifts fasting windows, eating windows, and check-in state.
+    queryClient.invalidateQueries({ queryKey: checkInKeys.all });
+    queryClient.invalidateQueries({ queryKey: fastingKeys.all });
   }, [queryClient]);
 };
 
@@ -86,6 +92,8 @@ export const useMealInvalidation = () => {
     queryClient.invalidateQueries({ queryKey: diaryReportKeys.all });
     queryClient.invalidateQueries({ queryKey: dailyProgressKeys.all });
     queryClient.invalidateQueries({ queryKey: reportKeys.all });
+    queryClient.invalidateQueries({ queryKey: checkInKeys.all });
+    queryClient.invalidateQueries({ queryKey: fastingKeys.all });
   }, [queryClient]);
 };
 

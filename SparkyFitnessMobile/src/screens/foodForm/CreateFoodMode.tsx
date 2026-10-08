@@ -10,6 +10,8 @@ import Icon from '../../components/Icon';
 import StepperInput from '../../components/StepperInput';
 import FoodForm, { type FoodFormData } from '../../components/FoodForm';
 import FoodImagePicker from '../../components/FoodImagePicker';
+import LabelScanSourceBanner from '../../components/LabelScanSourceBanner';
+import { useRetryLabelScan } from '../../hooks/useRetryLabelScan';
 import { usableFoodImages } from '../../utils/foodImages';
 import { splitPickerImages, type PickerImage } from '../../utils/pickerImages';
 import BottomSheetPicker from '../../components/BottomSheetPicker';
@@ -538,6 +540,12 @@ export function CreateFoodMode({
     },
   });
 
+  const {
+    canRetry: canRetryLabelScan,
+    retry: retryLabelScan,
+    retrying: retryingLabelScan,
+  } = useRetryLabelScan(params, navigation);
+
   return (
     <View
       className="flex-1 bg-background"
@@ -559,6 +567,13 @@ export function CreateFoodMode({
         hideSubmitButton={usesNativeHeader}
         headerChildren={
           <View className="mb-4">
+            {params.labelScanSource && (
+              <LabelScanSourceBanner
+                source={params.labelScanSource}
+                onRetry={canRetryLabelScan ? retryLabelScan : undefined}
+                busy={retryingLabelScan}
+              />
+            )}
             <FoodImagePicker
               items={pickerImages}
               onItemsChange={setPickerImages}

@@ -81,9 +81,10 @@ Always written by the generator. These have working defaults, but the timezone i
 - **`SPARKY_FITNESS_LOG_LEVEL`**: Verbosity — `DEBUG`, `INFO`, `WARN`, `ERROR` or `SILENT`. Defaults to `ERROR`. Raise it only while troubleshooting.
 - **`NODE_ENV`**: Always `production` for a deployment. The generator hardcodes it.
 - **`SPARKY_FITNESS_SERVER_PORT`**: Port the backend listens on inside its container. Defaults to `3010`. Docker Compose passes the same value to the frontend, whose nginx proxies to it, so the two always move together.
-- **`SPARKY_FITNESS_SERVER_HOST`**: Hostname or IP the frontend's nginx proxies to. Defaults to the `sparkyfitness-server` service name. It is resolved dynamically from inside the frontend container via DNS. If pointing to a host defined in `/etc/hosts` (such as `host.docker.internal` on Linux, `localhost`, or `--link` aliases), the frontend entrypoint automatically detects it and resolves it to its IP address directly. When deploying with custom Kubernetes manifests without the bundled Helm chart, specify the full in-cluster service FQDN (e.g., `sparkyfitness-server.default.svc.cluster.local`) since dynamic DNS resolution queries DNS directly without `/etc/resolv.conf` search domains.
+- **`SPARKY_FITNESS_SERVER_HOST`**: Hostname or IP the frontend's nginx proxies to. Defaults to the `sparkyfitness-server` service name. It is resolved dynamically from inside the frontend container via DNS. If pointing to a host defined in `/etc/hosts` (such as `host.docker.internal` on Linux, `localhost`, or `--link` aliases), the frontend entrypoint automatically detects it and resolves it to its IP address directly. nginx queries DNS directly and does not expand the `search` domains in `/etc/resolv.conf`, so a bare hostname that only resolves through a search path would not be reachable. The frontend entrypoint compensates: when the hostname contains no dot and does not resolve on its own, it is completed against each search domain in turn and the first that resolves is used (on Kubernetes, `sparkyfitness-server` becomes `sparkyfitness-server.<namespace>.svc.cluster.local`). Supplying the full in-cluster service FQDN yourself remains the most explicit option and skips that lookup entirely.
 - **`SPARKY_FITNESS_EXTRA_TRUSTED_ORIGINS`**: Comma-separated additional origins Better Auth should trust. Leave blank unless you reach the app on more than one URL.
 - **`BETTER_AUTH_URL`**: Overrides the base URL Better Auth builds callback links from. Only needed when it cannot be derived from `SPARKY_FITNESS_FRONTEND_URL`.
+- **`SPARKY_FITNESS_DISABLE_SCHEDULED_JOBS`**: Set to `true` on every instance except one when [running multiple instances](./multiple-instances.md#run-scheduled-jobs-on-one-instance), so a single instance runs the scheduled jobs. Set it on each instance's own environment, not in a shared `.env` file, or no instance will run them. Leave it unset on a single-container install.
 
 ### Module 3: 🛡️ Admin Email, Public Signups & Access Policy `[Backend]`
 
@@ -93,6 +94,8 @@ Controls initial administrator privileges, who may register, and how users sign 
 - **`SPARKY_FITNESS_DISABLE_SIGNUP`**: Set to `true` to disable new user registrations and lock the instance for private use.
 - **`SPARKY_FITNESS_DISABLE_EMAIL_LOGIN`**: Set to `true` to force users to log in exclusively via SSO. Overridden by `SPARKY_FITNESS_FORCE_EMAIL_LOGIN`. Configure OIDC or SMTP-backed magic links first — on a fresh instance with neither, this leaves no way to sign in, because passkey registration needs an existing session.
 - **`SPARKY_FITNESS_FORCE_EMAIL_LOGIN`**: Fail-safe toggle. Set to `true` to keep password login available if OIDC misbehaves. It takes precedence over `SPARKY_FITNESS_DISABLE_EMAIL_LOGIN`, so to actually disable password login you must set that to `true` **and** unset this one (or set it to `false`). `docker/.env.example` carries it only as a commented example, so it is off unless you uncomment it.
+- **`SPARKY_FITNESS_DISABLE_PASSKEY_LOGIN`**: Set to `true` to force passkey login off. Admins can also turn it off under Admin > Authentication > Login Management; this variable wins over that switch. Overridden by `SPARKY_FITNESS_FORCE_PASSKEY_LOGIN`. When off, passkey sign-in and adding new passkeys stop working; existing passkeys stay stored and can still be deleted. `SPARKY_FITNESS_FORCE_EMAIL_LOGIN` remains the way back in if SSO stops working.
+- **`SPARKY_FITNESS_FORCE_PASSKEY_LOGIN`**: Fail-safe toggle. Set to `true` to keep passkey login available even if it was turned off under Admin > Authentication > Login Management or with `SPARKY_FITNESS_DISABLE_PASSKEY_LOGIN`; it takes precedence over both. Use it to get back in if passkeys were turned off and were the only way to sign in.
 - **`ALLOW_PRIVATE_NETWORK_CORS`**: Set to `true` to allow Cross-Origin Resource Sharing (CORS) from private LAN subnets (`192.168.x.x`, `10.x.x.x`, `172.16.x.x`, `localhost`).
 
 ### Module 4: ✉️ SMTP Email Notifications `[Backend]`
@@ -165,8 +168,9 @@ Controls web access ports, Nginx brute-force protection, and client IP resolutio
 - **`SPARKY_FITNESS_FRONTEND_PORT`**: Port exposed on your host machine for web access. Defaults to `3004`.
 - **`NGINX_RATE_LIMIT`**: Rate limit on `/api/auth/*` routes to prevent brute-force attacks (e.g., `5r/s`). Defaults to `5r/s`.
 - **`NGINX_RESOLVER`**: DNS resolver used by Nginx to dynamically resolve upstream hostnames (e.g. when backend containers are restarted or recreated). Defaults to auto-detecting nameservers from `/etc/resolv.conf`, falling back to `127.0.0.11` (Docker embedded DNS). Host aliases defined in `/etc/hosts` (such as `host.docker.internal` or `localhost`) are automatically detected and resolved to IP literals on startup.
-- **`SPARKY_FITNESS_REAL_IP_HEADER`**: Name of the trusted proxy header containing the real client IP (e.g., `CF-Connecting-IP` for Cloudflare Tunnel / CDN, `X-Forwarded-For` for NPM/Traefik, `True-Client-IP` for Akamai).
-- **`SPARKY_FITNESS_TRUSTED_PROXY_HOPS`**: Number of proxy layers between client and server when not using a named header. Defaults to `1`.
+- **`SPARKY_FITNESS_REAL_IP_HEADER`**: Name of the trusted proxy header containing the real client IP (e.g., `CF-Connecting-IP` for Cloudflare Tunnel / CDN, `True-Client-IP` for Akamai). Only use this when your upstream edge proxy/CDN unconditionally sets or overwrites this header and direct access to your origin server is prevented.
+- **`SPARKY_FITNESS_TRUSTED_PROXY_HOPS`**: Number of proxy layers between client and the backend server when not using a named header. Defaults to `1` (which accounts for the bundled frontend Nginx container). If you run behind an external reverse proxy (such as Nginx Proxy Manager, Traefik, Caddy, or HAProxy), set this to `2` (1 external reverse proxy + 1 bundled frontend Nginx).
+- **`SPARKY_FITNESS_TRUSTED_PROXIES`**: Comma-separated list of trusted reverse-proxy IP addresses or CIDR blocks (e.g. `192.168.1.50,172.20.0.0/16`). Specify only the actual reverse-proxy IP addresses or a dedicated proxy-only subnet. Avoid broad private ranges (such as `192.168.0.0/16` or `10.0.0.0/8`), as every host within a trusted range is permitted to forward `X-Forwarded-For` headers.
 - **`SPARKY_FITNESS_EXTRA_TRUSTED_ORIGINS`**: Comma-separated list of additional local IP origins trusted by Better Auth (e.g., `http://192.168.1.100:3004`).
 - **`NGINX_LISTEN_PORT`**: Port Nginx listens on inside container (`80` root / `8080` non-root).
 - **`NGINX_ACCESS_LOG`** / **`NGINX_ERROR_LOG`**: Nginx log paths.
@@ -209,6 +213,10 @@ Configures code signing, bundle identifiers, and shared App Groups when building
 - **`EXPO_DEV_BUNDLE_IDENTIFIER`**: Development bundle ID (`org.SparkyApps.SparkyFitnessMobile.dev`).
 - **`WIDGET_BUNDLE_IDENTIFIER`**: iOS Widget extension bundle ID (`org.SparkyApps.SparkyFitnessMobile.dev.ExpoWidgetsTarget`).
 - **`IOS_APP_GROUP_DEV`** / **`IOS_APP_GROUP_PROD`**: App Group identifiers for widget shared memory.
+
+### Module 14: 🤖 Android Mobile App Build `[Mobile Build]`
+
+- **`GOOGLE_MAPS_ANDROID_API_KEY`** (optional): Google Maps key used to draw cardio routes over a map on Android. Without it, Android shows the route as a plain line; iOS always uses Apple Maps and needs no key. The app only makes plain Maps SDK for Android loads (no map ID), which Google does not charge for, but the key's Google Cloud project still needs billing enabled. Restrict the key to the app's package name and signing certificates, and pass it to the build (for example as an EAS secret) rather than committing it.
 
 ---
 

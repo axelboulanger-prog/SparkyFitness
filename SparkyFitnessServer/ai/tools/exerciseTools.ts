@@ -775,7 +775,7 @@ export function buildExerciseTools(userId: string, tz: string) {
 
 Actions:
 - search_exercises(searchTerm, muscleGroup?, equipment?, limit?, offset?)
-- create_exercise(name, category?, calories_per_hour?, description?, modality?:weight_reps|reps_only|duration|duration_distance)
+- create_exercise(name, category?, calories_per_hour?, description?, modality?:weight_reps|reps_only|bodyweight_reps|weight_duration|weight_distance|duration|duration_distance)
 - duplicate_exercise(exercise_id?|exercise_name?, name?) — copies any visible exercise (own, System or public) into a new private custom exercise, e.g. to make a variation; name defaults to "<original> (copy)"
 - log_exercise(entry_date, exercise_id?|exercise_name?, duration_minutes?, calories_burned?, notes?, distance?, avg_heart_rate?, steps?, sets?:JSON string or array of [{reps,weight,duration,distance,rest_time,set_type,rpe,rir,notes}]) — distance/avg_heart_rate/steps are for cardio; rpe is effort 0-10, rir is reps in reserve (0 = failure)
 - list_exercise_diary(entry_date) — returns diary entries with sets and WOD scores

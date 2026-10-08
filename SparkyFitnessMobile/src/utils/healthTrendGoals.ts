@@ -16,16 +16,3 @@ export function resolveWeightGoal(
 
   return weightFromKg(targetWeightKg, unit);
 }
-
-/**
- * `HydrationBarChart` expects `goal` in raw millilitres (matching `data`'s unit) and
- * converts it to the display unit itself, the same way it converts each plotted point —
- * converting here too would double-convert it.
- */
-export function resolveHydrationGoal(waterGoalMl: number): number | undefined {
-  if (waterGoalMl <= 0) {
-    return undefined;
-  }
-
-  return waterGoalMl;
-}

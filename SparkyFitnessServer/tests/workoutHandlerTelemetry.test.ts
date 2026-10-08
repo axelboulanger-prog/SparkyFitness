@@ -5,6 +5,8 @@ vi.mock('../models/exercise.js', () => ({
   default: {
     findExerciseByNameAndUserId: vi.fn(),
     createExercise: vi.fn(),
+    getExerciseBySourceAndSourceId: vi.fn(),
+    updateExercise: vi.fn(),
   },
 }));
 vi.mock('../models/exerciseEntry.js', () => ({
@@ -92,8 +94,10 @@ function baseEntry(extra: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  (exerciseDb.getExerciseBySourceAndSourceId as Mock).mockResolvedValue(null);
   (exerciseDb.findExerciseByNameAndUserId as Mock).mockResolvedValue(null);
   (exerciseDb.createExercise as Mock).mockResolvedValue({ id: 'exercise-1' });
+  (exerciseDb.updateExercise as Mock).mockResolvedValue({ id: 'exercise-1' });
   (exerciseEntryDb.createExerciseEntry as Mock).mockResolvedValue({
     id: ENTRY_ID,
   });
@@ -615,5 +619,167 @@ describe('workoutHandler — start time zone', () => {
     const data = (exerciseEntryDb.createExerciseEntry as Mock).mock.calls[0][1];
     expect(data.entry_time).toBeUndefined();
     expect(data.record_timezone).toBeUndefined();
+  });
+});
+
+describe('workoutHandler — exercise library matching and renaming resilience', () => {
+  it('matches exercise by exercise_source_id even when the user renamed the exercise', async () => {
+    // The user renamed "Elliptical" to "Crosstrainer" in the library
+    (exerciseDb.getExerciseBySourceAndSourceId as Mock).mockResolvedValueOnce({
+      id: 'existing-crosstrainer-id',
+      name: 'Crosstrainer',
+      source: 'HealthKit',
+      source_id: '16',
+    });
+
+    await workoutHandler.handle(
+      baseEntry({
+        activityType: 'Elliptical',
+        exercise_source_id: '16',
+      }),
+      makeCtx()
+    );
+
+    // Should have checked by source and source_id
+    expect(exerciseDb.getExerciseBySourceAndSourceId).toHaveBeenCalledWith(
+      'HealthKit',
+      '16',
+      'user-1'
+    );
+    // Should NOT have created a new exercise
+    expect(exerciseDb.createExercise).not.toHaveBeenCalled();
+    // Entry should link to the existing renamed exercise
+    const entryData = (exerciseEntryDb.createExerciseEntry as Mock).mock
+      .calls[0][1];
+    expect(entryData.exercise_id).toBe('existing-crosstrainer-id');
+  });
+
+  it('backfills source_id on legacy exercise matched by name', async () => {
+    // Existing exercise created before source_id was populated
+    (exerciseDb.getExerciseBySourceAndSourceId as Mock).mockResolvedValueOnce(
+      null
+    );
+    (exerciseDb.findExerciseByNameAndUserId as Mock).mockResolvedValueOnce({
+      id: 'legacy-elliptical-id',
+      name: 'Elliptical',
+      source: 'HealthKit',
+      source_id: null,
+    });
+
+    await workoutHandler.handle(
+      baseEntry({
+        activityType: 'Elliptical',
+        exercise_source_id: '16',
+      }),
+      makeCtx()
+    );
+
+    // Backfill called
+    expect(exerciseDb.updateExercise).toHaveBeenCalledWith(
+      'legacy-elliptical-id',
+      'user-1',
+      { source_id: '16' }
+    );
+    // Should not create a new exercise
+    expect(exerciseDb.createExercise).not.toHaveBeenCalled();
+    const entryData = (exerciseEntryDb.createExerciseEntry as Mock).mock
+      .calls[0][1];
+    expect(entryData.exercise_id).toBe('legacy-elliptical-id');
+  });
+
+  it('creates new exercise with source_id when neither source_id nor name matches', async () => {
+    (exerciseDb.getExerciseBySourceAndSourceId as Mock).mockResolvedValueOnce(
+      null
+    );
+    (exerciseDb.findExerciseByNameAndUserId as Mock).mockResolvedValueOnce(
+      null
+    );
+    (exerciseDb.createExercise as Mock).mockResolvedValueOnce({
+      id: 'new-exercise-id',
+    });
+
+    await workoutHandler.handle(
+      baseEntry({
+        activityType: 'Elliptical',
+        exercise_source_id: '16',
+      }),
+      makeCtx()
+    );
+
+    expect(exerciseDb.createExercise).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Elliptical',
+        source: 'HealthKit',
+        source_id: '16',
+        user_id: 'user-1',
+      })
+    );
+    const entryData = (exerciseEntryDb.createExerciseEntry as Mock).mock
+      .calls[0][1];
+    expect(entryData.exercise_id).toBe('new-exercise-id');
+  });
+
+  it('falls back to name matching when exercise_source_id is omitted', async () => {
+    (exerciseDb.findExerciseByNameAndUserId as Mock).mockResolvedValueOnce({
+      id: 'name-matched-id',
+      name: 'Outdoor Walk',
+    });
+
+    await workoutHandler.handle(
+      baseEntry({
+        activityType: 'Outdoor Walk',
+        // exercise_source_id omitted (e.g. from an older client)
+      }),
+      makeCtx()
+    );
+
+    expect(exerciseDb.getExerciseBySourceAndSourceId).not.toHaveBeenCalled();
+    expect(exerciseDb.findExerciseByNameAndUserId).toHaveBeenCalledWith(
+      'Outdoor Walk',
+      'user-1'
+    );
+    expect(exerciseDb.createExercise).not.toHaveBeenCalled();
+    const entryData = (exerciseEntryDb.createExerciseEntry as Mock).mock
+      .calls[0][1];
+    expect(entryData.exercise_id).toBe('name-matched-id');
+  });
+
+  it('rejects cross-source name matches when exercise_source_id is provided', async () => {
+    (exerciseDb.getExerciseBySourceAndSourceId as Mock).mockResolvedValueOnce(
+      null
+    );
+    // Same-name exercise exists, but from another source (e.g. garmin)
+    (exerciseDb.findExerciseByNameAndUserId as Mock).mockResolvedValueOnce({
+      id: 'garmin-exercise-id',
+      name: 'Running',
+      source: 'garmin',
+      source_id: 'garmin-123',
+    });
+    (exerciseDb.createExercise as Mock).mockResolvedValueOnce({
+      id: 'new-healthkit-running-id',
+    });
+
+    await workoutHandler.handle(
+      baseEntry({
+        activityType: 'Running',
+        exercise_source_id: '16',
+      }),
+      makeCtx()
+    );
+
+    // Should NOT backfill or use the garmin exercise
+    expect(exerciseDb.updateExercise).not.toHaveBeenCalled();
+    // Should create a provider-specific exercise instead
+    expect(exerciseDb.createExercise).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Running',
+        source: 'HealthKit',
+        source_id: '16',
+        user_id: 'user-1',
+      })
+    );
+    const entryData = (exerciseEntryDb.createExerciseEntry as Mock).mock
+      .calls[0][1];
+    expect(entryData.exercise_id).toBe('new-healthkit-running-id');
   });
 });

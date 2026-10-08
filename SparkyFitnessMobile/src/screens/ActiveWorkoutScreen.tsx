@@ -133,6 +133,13 @@ function ActiveWorkoutScreen({ navigation, route }: Props) {
   const [verifiedSourcePresetId, setVerifiedSourcePresetId] = useState<
     number | undefined
   >(undefined);
+  // Which preset/server pair the check above last settled for. Until it has
+  // settled, the cards' history is the unscoped "last time anywhere" rather
+  // than this preset's, so it must not be captured yet (see below).
+  const presetCheckKey = `${sourcePresetId ?? ''}|${sourceServerConfigId ?? ''}`;
+  const [settledPresetCheckKey, setSettledPresetCheckKey] = useState<
+    string | null
+  >(null);
   useEffect(() => {
     if (!isFocused || sourcePresetId == null) return;
     let cancelled = false;
@@ -146,14 +153,23 @@ function ActiveWorkoutScreen({ navigation, route }: Props) {
       } catch {
         if (!cancelled) setVerifiedSourcePresetId(undefined);
       }
+      if (!cancelled) setSettledPresetCheckKey(presetCheckKey);
     })();
     return () => {
       cancelled = true;
     };
-  }, [isFocused, sourcePresetId, sourceServerConfigId]);
+  }, [isFocused, sourcePresetId, sourceServerConfigId, presetCheckKey]);
 
   const effectiveVerifiedSourcePresetId =
     isFocused && sourcePresetId != null ? verifiedSourcePresetId : undefined;
+  // The store keeps the first history each exercise reports, and the watch's
+  // targets, a lock-screen complete and the rest notification all read it.
+  // Capturing before the preset check settles would pin the unscoped history
+  // while the rows go on to show this preset's, so the watch would miss a
+  // progression the phone displays.
+  const historyScopeSettled =
+    sourcePresetId == null ||
+    (isFocused && settledPresetCheckKey === presetCheckKey);
 
   const { flush } = useActiveWorkoutAutosave();
   const { runNavigationAction } = useNavigationActionGuard(navigation);
@@ -776,6 +792,7 @@ function ActiveWorkoutScreen({ navigation, route }: Props) {
           prSetIds={prSetIds}
           sessionId={sessionId}
           verifiedSourcePresetId={effectiveVerifiedSourcePresetId}
+          historyScopeSettled={historyScopeSettled}
           activeSetId={activeSetId}
           focusedSetKey={focusedSetKey}
           setRenderKeys={setRenderKeys}

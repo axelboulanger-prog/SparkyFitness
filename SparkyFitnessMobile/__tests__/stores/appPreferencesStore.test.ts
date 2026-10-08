@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { HEALTH_TREND_KEYS } from '../../src/constants/healthTrends';
+import { WATCH_PAGE_KEYS } from '../../src/constants/watchPages';
 import {
   useAppPreferencesStore,
   PREFERENCE_DEFAULTS,
@@ -126,6 +127,44 @@ describe('appPreferencesStore', () => {
     });
   });
 
+  describe('watch page preferences', () => {
+    it('defaults to every page, in the order the watch shipped with', () => {
+      const state = useAppPreferencesStore.getState();
+      expect(state.watchPageOrder).toEqual([...WATCH_PAGE_KEYS]);
+      expect(state.hiddenWatchPages).toEqual([]);
+    });
+
+    it('writes order and hidden pages independently', () => {
+      const store = useAppPreferencesStore.getState();
+      store.setWatchPageOrder(['workout', 'goals', 'water', 'entry', 'trend']);
+      expect(useAppPreferencesStore.getState().watchPageOrder[0]).toBe(
+        'workout'
+      );
+
+      store.setWatchPageHidden('trend', true);
+      store.setWatchPageHidden('trend', true);
+      expect(useAppPreferencesStore.getState().hiddenWatchPages).toEqual([
+        'trend',
+      ]);
+
+      store.setWatchPageHidden('trend', false);
+      expect(useAppPreferencesStore.getState().hiddenWatchPages).toEqual([]);
+    });
+
+    it('shows the three macros on the Goals page until the wearer picks', () => {
+      const store = useAppPreferencesStore.getState();
+      expect(store.shownWatchNutrients).toEqual(['protein', 'carbs', 'fat']);
+
+      store.setWatchNutrientShown('sodium', true);
+      store.setWatchNutrientShown('fat', false);
+      expect(useAppPreferencesStore.getState().shownWatchNutrients).toEqual([
+        'protein',
+        'carbs',
+        'sodium',
+      ]);
+    });
+  });
+
   describe('dashboard card preferences', () => {
     it('defaults to the full registry order', () => {
       const state = useAppPreferencesStore.getState();
@@ -139,8 +178,10 @@ describe('appPreferencesStore', () => {
         'fasting',
         'cycle',
         'medications',
+        'symptoms',
         'progressPhotos',
         'healthTrends',
+        'mindfulness',
       ]);
     });
 
@@ -150,6 +191,15 @@ describe('appPreferencesStore', () => {
       expect(useAppPreferencesStore.getState().dashboardCardOrder).toEqual(
         newOrder
       );
+    });
+
+    it('persists symptomsCardVisible across storage write', async () => {
+      useAppPreferencesStore.getState().setSymptomsCardVisible(false);
+      expect(useAppPreferencesStore.getState().symptomsCardVisible).toBe(false);
+      const raw = await AsyncStorage.getItem('@SparkyFitness/app-preferences');
+      expect(raw).toBeTruthy();
+      const parsed = JSON.parse(raw!);
+      expect(parsed.state.symptomsCardVisible).toBe(false);
     });
   });
 

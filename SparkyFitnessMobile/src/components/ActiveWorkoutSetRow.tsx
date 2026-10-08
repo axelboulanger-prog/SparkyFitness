@@ -6,10 +6,10 @@ import React, {
   useState,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Pressable, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, Text, TextInput, View } from 'react-native';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { useCSSVariable } from 'uniwind';
-import { RIR_MAX, RIR_MIN } from '@workspace/shared';
+import { RIR_MAX, RIR_MIN, isBodyweightModality } from '@workspace/shared';
 import { measureAnchoredMenuTrigger, type AnchorRect } from './AnchoredMenu';
 import CompletionCheck, { LogCircle } from './CompletionCheck';
 import Icon from './Icon';
@@ -21,7 +21,10 @@ import {
 } from './SetRowChrome';
 import { focusWithAndroidImeRetry } from '../utils/keyboardFocus';
 import { withAlpha } from '../utils/colors';
-import { parseDecimalInput } from '../utils/numericInput';
+import {
+  parseDecimalInput,
+  parseSignedDecimalInput,
+} from '../utils/numericInput';
 import {
   distanceFromKm,
   weightFromKg,
@@ -34,9 +37,15 @@ import {
   estimateRepMaxKg,
   formatRecentSessionSet,
   firstSetInputField,
+  formatSetWeightText,
   getRpeTone,
   isDurationModality,
+  isWeightDistanceModality,
+  isWeightDurationModality,
   quantizeSetWeightKg,
+  setDistanceFromKm,
+  setDistanceToKm,
+  setLoadKg,
   setTypeLetter,
   setVolumeKg,
   type AssumedSetValues,
@@ -113,6 +122,11 @@ interface ActiveWorkoutSetRowProps {
    * `duration_distance` view rows).
    */
   modality?: ExerciseModality;
+  /**
+   * The lifter's body weight (kg), for a bodyweight exercise's volume and
+   * estimated maxes. Null when unknown: only the added weight counts then.
+   */
+  bodyWeightKg?: number | null;
   /** Display unit for the `duration_distance` view-mode distance cell. */
   distanceUnit?: 'km' | 'miles';
   /**
@@ -218,6 +232,7 @@ interface ActiveWorkoutSetRowProps {
 function ActiveWorkoutSetRow({
   set,
   modality = 'weight_reps',
+  bodyWeightKg = null,
   distanceUnit = 'km',
   renderKey,
   displayNumber,
@@ -292,6 +307,10 @@ function ActiveWorkoutSetRow({
 
   const setId = String(set.id);
   const durationLike = isDurationModality(modality);
+  // Loaded holds and carries: a weight cell plus a duration or distance cell
+  // in place of reps.
+  const weightDuration = isWeightDurationModality(modality);
+  const weightDistance = isWeightDistanceModality(modality);
   // Legacy-aware display seconds: `duration` modality falls back to
   // reps-as-seconds for pre-modality isometric rows (see
   // effectiveSetDurationSec). Editing writes `duration`; reps stay untouched.
@@ -311,6 +330,15 @@ function ActiveWorkoutSetRow({
     set.reps != null ? String(set.reps) : ''
   );
   const [durationDraft, setDurationDraft] = useState(durationSeedText);
+  const distanceSeedText =
+    set.distance != null
+      ? String(
+          parseFloat(
+            setDistanceFromKm(set.distance, distanceUnit, modality).toFixed(2)
+          )
+        )
+      : '';
+  const [distanceDraft, setDistanceDraft] = useState(distanceSeedText);
   // The per-set effort input edits whichever effort metric the column shows:
   // RIR when the RIR column is picked, otherwise RPE. The draft, ref, focus
   // field ('rpe') and accessory-bar wiring are shared between the two.
@@ -333,7 +361,7 @@ function ActiveWorkoutSetRow({
   // this row's instance alive across an autosave that only reassigns the id, so
   // keying the re-seed on the id would wipe in-progress text under a still-open
   // keyboard.
-  const signature = `${set.weight}|${set.reps}|${set.duration}|${set.rpe}|${set.rir}|${effortField}|${weightUnit}`;
+  const signature = `${set.weight}|${set.reps}|${set.duration}|${set.distance}|${set.rpe}|${set.rir}|${effortField}|${weightUnit}|${distanceUnit}`;
   const [prevSignature, setPrevSignature] = useState(signature);
   if (signature !== prevSignature) {
     setPrevSignature(signature);
@@ -346,6 +374,7 @@ function ActiveWorkoutSetRow({
       setWeightDraft(formatDisplayWeight(set.weight, weightUnit));
       setRepsDraft(set.reps != null ? String(set.reps) : '');
       setDurationDraft(durationSeedText);
+      setDistanceDraft(distanceSeedText);
       // RPE alone commits per keystroke in edit mode, so a re-seed can arrive
       // mid-typing: leave the draft alone while its parse already matches the
       // committed value (e.g. "0" clamps to 1 — rewriting would jump the text
@@ -359,6 +388,7 @@ function ActiveWorkoutSetRow({
   const weightInputRef = useRef<TextInput>(null);
   const repsInputRef = useRef<TextInput>(null);
   const durationInputRef = useRef<TextInput>(null);
+  const distanceInputRef = useRef<TextInput>(null);
   const rpeInputRef = useRef<TextInput>(null);
 
   // Move the keyboard to the commanded input when this row is the focused
@@ -374,9 +404,11 @@ function ActiveWorkoutSetRow({
         ? repsInputRef
         : activeField === 'duration'
           ? durationInputRef
-          : activeField === 'rpe'
-            ? rpeInputRef
-            : weightInputRef;
+          : activeField === 'distance'
+            ? distanceInputRef
+            : activeField === 'rpe'
+              ? rpeInputRef
+              : weightInputRef;
     return focusWithAndroidImeRetry(ref);
   }, [isFocusedRow, activeField]);
 
@@ -385,6 +417,7 @@ function ActiveWorkoutSetRow({
   // raw keystrokes like "102.55" survive to save without a kg round-trip.
   const editWeightText = set.editWeightText ?? '';
   const editRepsText = set.editRepsText ?? '';
+  const editDistanceText = set.editDistanceText ?? '';
 
   // Assumed-value display text for a still-empty field (live only): the gray
   // placeholder in the cell, and what logging the set will record.
@@ -416,7 +449,13 @@ function ActiveWorkoutSetRow({
     }
     const patch: ActiveSetPatch = {};
     if (previousSet.weight != null) patch.weight = previousSet.weight;
-    if (previousSet.reps != null) patch.reps = previousSet.reps;
+    if (weightDuration) {
+      if (previousSet.duration != null) patch.duration = previousSet.duration;
+    } else if (weightDistance) {
+      if (previousSet.distance != null) patch.distance = previousSet.distance;
+    } else if (previousSet.reps != null) {
+      patch.reps = previousSet.reps;
+    }
     if (Object.keys(patch).length === 0) return;
     onCommitField?.(setId, patch);
     // A focused row skips the store-driven re-seed (drafts win under the
@@ -425,8 +464,38 @@ function ActiveWorkoutSetRow({
     if (previousSet.weight != null) {
       setWeightDraft(formatDisplayWeight(previousSet.weight, weightUnit));
     }
-    if (previousSet.reps != null) setRepsDraft(String(previousSet.reps));
-  }, [previousSet, durationLike, modality, onCommitField, setId, weightUnit]);
+    if (weightDuration) {
+      if (previousSet.duration != null) {
+        setDurationDraft(String(previousSet.duration));
+      }
+    } else if (weightDistance) {
+      if (previousSet.distance != null) {
+        setDistanceDraft(
+          String(
+            parseFloat(
+              setDistanceFromKm(
+                previousSet.distance,
+                distanceUnit,
+                modality
+              ).toFixed(2)
+            )
+          )
+        );
+      }
+    } else if (previousSet.reps != null) {
+      setRepsDraft(String(previousSet.reps));
+    }
+  }, [
+    previousSet,
+    durationLike,
+    weightDuration,
+    weightDistance,
+    distanceUnit,
+    modality,
+    onCommitField,
+    setId,
+    weightUnit,
+  ]);
 
   // Commit the parsed+clamped value on every keystroke — including empty → null
   // — so WorkoutDetailScreen's header Save, which reads the reducer synchronously
@@ -464,7 +533,11 @@ function ActiveWorkoutSetRow({
       // user). Only a real edit — a draft that no longer matches — reaches the
       // store. This also spares an unedited log a spurious revision bump.
       if (text === formatDisplayWeight(set.weight, weightUnit)) return;
-      const value = parseDecimalInput(text);
+      // A bodyweight set accepts a sign. Every other modality rejects it, so a
+      // pasted minus does not become a negative load.
+      const value = isBodyweightModality(modality)
+        ? parseSignedDecimalInput(text)
+        : parseDecimalInput(text);
       // Quantized so the stored kg matches what the server will echo back —
       // an unrounded lbs conversion would differ post-save and re-seed the
       // row's drafts (see quantizeSetWeightKg).
@@ -476,7 +549,7 @@ function ActiveWorkoutSetRow({
       if (weightKg === (set.weight ?? null)) return;
       onCommitField?.(setId, { weight: weightKg });
     },
-    [onCommitField, setId, weightUnit, set.weight]
+    [modality, onCommitField, setId, weightUnit, set.weight]
   );
 
   const commitReps = useCallback(
@@ -501,6 +574,29 @@ function ActiveWorkoutSetRow({
       onCommitField?.(setId, { duration: seconds });
     },
     [onCommitField, setId, set.duration, durationSeedText]
+  );
+
+  const commitDistance = useCallback(
+    (text: string) => {
+      if (text === distanceSeedText) return;
+      const value = parseDecimalInput(text);
+      // Three decimals of km is a millimetre: enough that a metre or a yard
+      // survives the round trip.
+      const km = Number.isNaN(value)
+        ? null
+        : Math.round(setDistanceToKm(value, distanceUnit, modality) * 1e6) /
+          1e6;
+      if (km === (set.distance ?? null)) return;
+      onCommitField?.(setId, { distance: km });
+    },
+    [
+      onCommitField,
+      setId,
+      set.distance,
+      distanceSeedText,
+      distanceUnit,
+      modality,
+    ]
   );
 
   // Store-commit only, no draft echo — the deactivation effect below may call
@@ -536,6 +632,12 @@ function ActiveWorkoutSetRow({
     if (!isLive || isFocusedRow) return;
     if (durationLike) {
       commitDuration(durationDraft);
+    } else if (weightDuration) {
+      commitWeight(weightDraft);
+      commitDuration(durationDraft);
+    } else if (weightDistance) {
+      commitWeight(weightDraft);
+      commitDistance(distanceDraft);
     } else {
       commitWeight(weightDraft);
       commitReps(repsDraft);
@@ -545,14 +647,18 @@ function ActiveWorkoutSetRow({
     isLive,
     isFocusedRow,
     durationLike,
+    weightDuration,
+    weightDistance,
     commitWeight,
     commitReps,
     commitDuration,
+    commitDistance,
     commitRpeValue,
     isEffortColumn,
     weightDraft,
     repsDraft,
     durationDraft,
+    distanceDraft,
     rpeDraft,
   ]);
 
@@ -563,6 +669,12 @@ function ActiveWorkoutSetRow({
   const handleLog = useCallback(() => {
     if (durationLike) {
       commitDuration(durationDraft);
+    } else if (weightDuration) {
+      commitWeight(weightDraft);
+      commitDuration(durationDraft);
+    } else if (weightDistance) {
+      commitWeight(weightDraft);
+      commitDistance(distanceDraft);
     } else {
       commitWeight(weightDraft);
       commitReps(repsDraft);
@@ -571,9 +683,12 @@ function ActiveWorkoutSetRow({
     onComplete?.(setId);
   }, [
     durationLike,
+    weightDuration,
+    weightDistance,
     commitWeight,
     commitReps,
     commitDuration,
+    commitDistance,
     commitRpe,
     isEffortColumn,
     onComplete,
@@ -581,6 +696,7 @@ function ActiveWorkoutSetRow({
     weightDraft,
     repsDraft,
     durationDraft,
+    distanceDraft,
     rpeDraft,
   ]);
 
@@ -607,9 +723,11 @@ function ActiveWorkoutSetRow({
             ? repsInputRef
             : field === 'duration'
               ? durationInputRef
-              : field === 'rpe'
-                ? rpeInputRef
-                : weightInputRef;
+              : field === 'distance'
+                ? distanceInputRef
+                : field === 'rpe'
+                  ? rpeInputRef
+                  : weightInputRef;
         ref.current?.focus();
       },
       advance: () => handleAdvanceRef.current(),
@@ -631,18 +749,27 @@ function ActiveWorkoutSetRow({
         return { text: formatRpe(set.rir) };
       }
       case 'volume':
-        return { text: formatMetricWeight(setVolumeKg(set), weightUnit) };
+        return {
+          text: formatMetricWeight(
+            setVolumeKg(set, modality, bodyWeightKg),
+            weightUnit
+          ),
+        };
       case 'e1rm':
         return {
           text: formatMetricWeight(
-            epley1RmKg(set.weight, set.reps),
+            epley1RmKg(setLoadKg(set.weight, modality, bodyWeightKg), set.reps),
             weightUnit
           ),
         };
       case 'tenrm':
         return {
           text: formatMetricWeight(
-            estimateRepMaxKg(set.weight, set.reps, 10),
+            estimateRepMaxKg(
+              setLoadKg(set.weight, modality, bodyWeightKg),
+              set.reps,
+              10
+            ),
             weightUnit
           ),
         };
@@ -834,14 +961,26 @@ function ActiveWorkoutSetRow({
           style={{ fontVariant: ['tabular-nums'] }}
         >
           {previousSet != null
-            ? formatRecentSessionSet(previousSet, weightUnit, t, modality)
+            ? formatRecentSessionSet(
+                previousSet,
+                weightUnit,
+                t,
+                modality,
+                distanceUnit
+              )
             : '-'}
         </Text>
       </Pressable>
     ) : null;
 
   const displayWeight =
-    set.weight != null ? formatDisplayWeight(set.weight, weightUnit) : '–';
+    set.weight != null
+      ? formatSetWeightText(
+          formatDisplayWeight(set.weight, weightUnit),
+          set.weight,
+          modality
+        )
+      : '–';
   const displayReps = set.reps != null ? String(set.reps) : '–';
 
   // View cells: flat text.
@@ -882,6 +1021,20 @@ function ActiveWorkoutSetRow({
     </Text>
   );
 
+  const carryDistanceCellText = (
+    <Text
+      className="flex-1 text-center text-sm text-text-primary"
+      style={{ fontVariant: ['tabular-nums'] }}
+    >
+      {set.distance != null
+        ? formatLocalizedNumber(
+            setDistanceFromKm(set.distance, distanceUnit, modality),
+            { maximumFractionDigits: 1 }
+          )
+        : '–'}
+    </Text>
+  );
+
   // Live and edit cells: always-mounted inputs. Focus lands natively on tap
   // and is reported up through onActivateSet/onActivateRpe so the screen can
   // mark the focused row and target its sticky accessory bar; because the
@@ -891,6 +1044,13 @@ function ActiveWorkoutSetRow({
   // values as gray placeholders; edit cells are controlled by the form
   // reducer (weight/reps per keystroke; RPE snapped per keystroke) so a
   // header Save reads the draft synchronously with no flush step.
+  // iOS's decimal pad has no minus key, and an assisted bodyweight set needs
+  // one; Android's numeric pad carries it.
+  const weightKeyboardType = !isBodyweightModality(modality)
+    ? 'decimal-pad'
+    : Platform.OS === 'ios'
+      ? 'numbers-and-punctuation'
+      : 'numeric';
   const weightInputCell = (
     <View className="flex-1 items-center">
       <SetCellInput
@@ -903,7 +1063,7 @@ function ActiveWorkoutSetRow({
         }
         onBlur={isEdit ? undefined : () => commitWeight(weightDraft)}
         onFocus={() => onActivateSet?.(setId, 'weight')}
-        keyboardType="decimal-pad"
+        keyboardType={weightKeyboardType}
         accessibilityLabel={t('activeWorkout.setRow.weight', {
           defaultValue: 'Weight',
         })}
@@ -937,6 +1097,39 @@ function ActiveWorkoutSetRow({
       />
     </View>
   );
+  const assumedDistanceText =
+    isLive && set.distance == null && assumed?.distance != null
+      ? String(
+          parseFloat(
+            setDistanceFromKm(assumed.distance, distanceUnit, modality).toFixed(
+              2
+            )
+          )
+        )
+      : null;
+  const distanceInputCell = (
+    <View className="flex-1 items-center">
+      <SetCellInput
+        inputRef={distanceInputRef}
+        value={isEdit ? editDistanceText : distanceDraft}
+        onChangeText={
+          isEdit
+            ? (text) => onEditFieldChange?.(setId, 'distance', text)
+            : setDistanceDraft
+        }
+        onBlur={isEdit ? undefined : () => commitDistance(distanceDraft)}
+        onFocus={() => onActivateSet?.(setId, 'distance')}
+        keyboardType="decimal-pad"
+        accessibilityLabel={t('activeWorkout.setRow.distance', {
+          defaultValue: 'Distance',
+        })}
+        className="w-16"
+        placeholder={isEdit ? '–' : (assumedDistanceText ?? '–')}
+        flat
+      />
+    </View>
+  );
+
   // Timed/hold-set stopwatch. The start time lives in the persisted store
   // (keyed by set id), so it survives this row unmounting, a collapsed card
   // and a cold start; only the ticking display is local.
@@ -1100,6 +1293,16 @@ function ActiveWorkoutSetRow({
           ) : (
             durationInputCell
           )
+        ) : weightDuration ? (
+          <>
+            {readOnly ? weightCellText : weightInputCell}
+            {readOnly ? durationCellText : durationInputCell}
+          </>
+        ) : weightDistance ? (
+          <>
+            {readOnly ? weightCellText : weightInputCell}
+            {readOnly ? carryDistanceCellText : distanceInputCell}
+          </>
         ) : (
           <>
             {modality !== 'reps_only' &&

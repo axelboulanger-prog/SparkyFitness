@@ -17,6 +17,8 @@ SparkyFitness supports integration with the following health and fitness data pr
 - Polar Flow (partially tested)
 - Hevy (not tested)
 - [Liftosaur](/features/settings/liftosaur)
+- [Canadian Nutrient File (Health Canada)](/features/settings/canadian-nutrient-file)
+- Swiss Food Composition Database
 - OpenFoodFacts
 - USDA
 - Fatsecret
@@ -25,6 +27,14 @@ SparkyFitness supports integration with the following health and fitness data pr
 - Tandoor
 - Strava (partially tested)
 - [COROS](/features/settings/coros)
+
+## Canadian Nutrient File (Health Canada)
+
+The Canadian Nutrient File (CNF) is Health Canada's official food composition database containing ~5,700 items with complete macronutrient, micronutrient, and household portion profiles. It is completely free, public, and requires no API keys or accounts.
+
+SparkyFitness supports both **live on-demand search** across the official Health Canada API in English and French, as well as **offline bulk catalog import** to cache the entire catalog locally.
+
+For setup instructions, import options, and licensing information, see the [Canadian Nutrient File Documentation](/features/settings/canadian-nutrient-file).
 
 ## Open Food Facts Accounts and Contributions
 

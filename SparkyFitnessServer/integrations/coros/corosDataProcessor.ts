@@ -23,7 +23,7 @@ export async function importCorosActivityFromFit(
 export async function importCorosActivitySummary(
   userId: string,
   record: CorosSportRecord
-): Promise<{ operation: 'created' | 'updated'; id: string }> {
+): Promise<{ id: string }> {
   const sportInfo = COROS_SPORT_TYPES[record.sportType];
   const exerciseName = sportInfo?.name ?? record.name ?? 'COROS Activity';
   const category = sportInfo?.category ?? 'cardio';
@@ -59,27 +59,23 @@ export async function importCorosActivitySummary(
     : null;
   const notes = `Logged from COROS (summary only): ${record.name}.`;
 
-  const { entry, operation } =
-    await exerciseEntryRepository.createExerciseEntry(
-      userId,
-      {
-        exercise_id: exercise.id,
-        source_id: record.labelId,
-        duration_minutes: durationMinutes,
-        calories_burned: caloriesBurned,
-        distance: distanceKm,
-        avg_heart_rate: avgHeartRate,
-        entry_date: entryDate,
-        notes,
-      },
-      userId,
-      COROS_ENTRY_SOURCE
-    );
+  const entry = await exerciseEntryRepository.createExerciseEntry(
+    userId,
+    {
+      exercise_id: exercise.id,
+      source_id: record.labelId,
+      duration_minutes: durationMinutes,
+      calories_burned: caloriesBurned,
+      distance: distanceKm,
+      avg_heart_rate: avgHeartRate,
+      entry_date: entryDate,
+      notes,
+    },
+    userId,
+    COROS_ENTRY_SOURCE
+  );
 
-  return {
-    operation: operation as 'created' | 'updated',
-    id: entry.id,
-  };
+  return { id: entry.id };
 }
 
 export default {

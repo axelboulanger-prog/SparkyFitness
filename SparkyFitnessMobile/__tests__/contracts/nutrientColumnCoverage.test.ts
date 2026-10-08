@@ -68,6 +68,12 @@ const DELIBERATE_OMISSIONS: Omission[] = [
     reason: 'Report totals read hydration from its own water arm.',
   },
   {
+    file: /^services\/onDeviceLabelScan\.ts$/,
+    columns: TRACKED_COLUMNS,
+    reason:
+      'The on-device model does not extract caffeine, water or alcohol; the result sets them to null once, and the range checks only cover fields the model returns.',
+  },
+  {
     file: /^components\/FoodForm\.tsx$/,
     columns: TRACKED_COLUMNS,
     reason:

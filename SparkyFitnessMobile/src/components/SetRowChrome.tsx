@@ -76,7 +76,9 @@ export interface SetCellInputProps {
   onChangeText: (text: string) => void;
   onFocus?: () => void;
   onBlur?: () => void;
-  keyboardType: 'decimal-pad' | 'number-pad';
+  /** `numbers-and-punctuation` / `numeric` are for a signed (bodyweight) weight. */
+  keyboardType:
+    'decimal-pad' | 'number-pad' | 'numbers-and-punctuation' | 'numeric';
   accessibilityLabel: string;
   inputRef: Ref<TextInput>;
   className?: string;

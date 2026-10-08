@@ -9,6 +9,7 @@ import {
   Activity,
   Table as TableIcon,
   Pill,
+  HeartPulse,
 } from 'lucide-react';
 
 interface ReportsControlsProps {
@@ -65,6 +66,11 @@ const ReportsControls = ({
       id: 'medications-reports',
       label: t('reports.medicationsTab', 'Medications'),
       icon: Pill,
+    },
+    {
+      id: 'symptoms-reports',
+      label: t('reports.symptomsTab', 'Symptoms'),
+      icon: HeartPulse,
     },
     {
       id: 'table',

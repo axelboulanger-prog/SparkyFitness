@@ -237,9 +237,10 @@ const WeightLineChart: React.FC<WeightLineChartProps> = ({
                   connectMissingData
                 />
                 <TrendGoalLine
+                  points={points.weight}
                   chartBounds={chartBounds}
                   yScale={yScale}
-                  goal={goal}
+                  goals={data.map(() => goal)}
                   color={textMuted}
                 />
               </>

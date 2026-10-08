@@ -58,6 +58,15 @@ vi.mock('../utils/mockDataOptions.js', () => ({
 
 const { default: corosRoutes } = await import('../routes/corosRoutes.js');
 
+vi.mock('../services/providerSyncClaim.js', async (importActual) => ({
+  ...(await importActual<typeof import('../services/providerSyncClaim.js')>()),
+  startProviderSync: vi.fn(async (_target, sync) => ({ running: sync() })),
+}));
+import {
+  SYNC_ALREADY_RUNNING_RESPONSE,
+  startProviderSync,
+} from '../services/providerSyncClaim.js';
+
 function app() {
   const instance = express();
   instance.use(express.json());
@@ -78,6 +87,22 @@ describe('COROS routes', () => {
     const res = await request(app()).get('/api/integrations/coros/authorize');
     expect(res.statusCode).toBe(200);
     expect(res.body.authUrl).toContain('mcpus.coros.com');
+  });
+
+  it('answers 409 without syncing while another sync holds the account', async () => {
+    vi.mocked(startProviderSync).mockResolvedValueOnce(null);
+
+    const res = await request(app())
+      .post('/api/integrations/coros/sync')
+      .send({});
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toEqual(SYNC_ALREADY_RUNNING_RESPONSE);
+    expect(startProviderSync).toHaveBeenCalledWith(
+      { userId: USER_ID, providerType: 'coros_mcp' },
+      expect.any(Function)
+    );
+    expect(corosSyncService.syncCorosData).not.toHaveBeenCalled();
   });
 
   it('POST /sync triggers sync and returns stats', async () => {

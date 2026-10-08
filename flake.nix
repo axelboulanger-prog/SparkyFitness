@@ -21,7 +21,9 @@
         # pnpm 10 is required because the repo still uses the `pnpm` field in
         # package.json (overrides/patchedDependencies), which pnpm 11 ignores.
         nodejs = pkgs.nodejs_24;
-        pnpm = pkgs.pnpm_10;
+        # nixpkgs keeps `pnpm_10` frozen at 10.34.0 (insecure) on some releases and ships the maintained
+        # 10.x as `pnpm_10_latest`; nixos-unstable made `pnpm_10` the maintained one and dropped the alias.
+        pnpm = pkgs.pnpm_10_latest or pkgs.pnpm_10;
 
         # Bind the top-level pnpm fetcher/hook to the pinned pnpm 10 so both the
         # offline dep fetch and the install hook use the same version.

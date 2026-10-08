@@ -8,6 +8,10 @@ import withingsServiceCentral from '../services/withingsService.js';
 import requireSelfActor from '../middleware/requireSelfMiddleware.js';
 import { OAuthStateError } from '../utils/oauthState.js';
 import { describeError } from '../utils/errors.js';
+import {
+  SYNC_ALREADY_RUNNING_RESPONSE,
+  startProviderSync,
+} from '../services/providerSyncClaim.js';
 const router = express.Router();
 /**
  * @swagger
@@ -172,14 +176,23 @@ router.post(
         req.body,
         req.authenticatedUserId
       );
-      const result = await withingsServiceCentral.syncWithingsData(
-        userId,
-        'manual',
-        startDate,
-        endDate,
-        dataSource,
-        saveMockData
+      const started = await startProviderSync(
+        { userId, providerType: 'withings' },
+        () =>
+          withingsServiceCentral.syncWithingsData(
+            userId,
+            'manual',
+            startDate,
+            endDate,
+            dataSource,
+            saveMockData
+          )
       );
+      if (!started) {
+        res.status(409).json(SYNC_ALREADY_RUNNING_RESPONSE);
+        return;
+      }
+      const result = await started.running;
       log(
         'info',
         `Withings data sync completed for user ${userId}. Source: ${result.source}`

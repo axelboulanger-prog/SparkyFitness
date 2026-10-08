@@ -10,6 +10,10 @@ import { log } from '../config/logging.js';
 import moment from 'moment';
 import garminService from '../services/garminService.js';
 import { getGarminSyncPhaseErrors } from '../services/garminSyncResult.js';
+import {
+  SYNC_ALREADY_RUNNING_RESPONSE,
+  startProviderSync,
+} from '../services/providerSyncClaim.js';
 const router = express.Router();
 router.use(express.json());
 // Date validation constants
@@ -440,14 +444,23 @@ router.post(
         'info',
         `[garminRoutes] Manual full sync requested for user ${userId}${startDate ? ` from ${startDate}` : ''}${endDate ? ` to ${endDate}` : ''}`
       );
-      const result = await garminService.syncGarminData(
-        userId,
-        'manual',
-        startDate,
-        endDate,
-        dataSource,
-        saveMockData
+      const started = await startProviderSync(
+        { userId, providerType: 'garmin' },
+        () =>
+          garminService.syncGarminData(
+            userId,
+            'manual',
+            startDate,
+            endDate,
+            dataSource,
+            saveMockData
+          )
       );
+      if (!started) {
+        res.status(409).json(SYNC_ALREADY_RUNNING_RESPONSE);
+        return;
+      }
+      const result = await started.running;
       const failedPhases = getGarminSyncPhaseErrors(result);
       // Update the last sync timestamp
       const provider =

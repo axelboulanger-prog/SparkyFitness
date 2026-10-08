@@ -1,18 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
+import Toast from 'react-native-toast-message';
 import WatchConnectivity, {
   type WatchSetCompletedPayload,
+  type WatchRestChangedPayload,
+  type WatchSetTimerStartedPayload,
+  type WatchSetTimerStoppedPayload,
   type WatchHeartRateBatchPayload,
   type WatchWorkoutStopPayload,
+  type WatchWorkoutDiscardPayload,
 } from '../../modules/watch-connectivity';
 import {
+  consumeWorkoutDiscarded,
   useActiveWorkoutStore,
   type ActiveSetPatch,
 } from '../stores/activeWorkoutStore';
+import {
+  newestHeartRateSample,
+  useLiveHeartRateStore,
+} from '../stores/liveHeartRateStore';
 import { saveActiveWorkoutSession } from './useActiveWorkoutAutosave';
-import { attachExerciseEntryWatchTelemetry } from '../services/api/exerciseApi';
+import {
+  attachExerciseEntryWatchTelemetry,
+  deleteWorkout,
+} from '../services/api/exerciseApi';
 import { ApiError } from '../services/api/errors';
 import { addLog } from '../services/LogService';
+import i18n from '../localization/i18n';
 import { queryClient } from './queryClient';
 import { invalidateExerciseCache } from './invalidateExerciseCache';
 import { normalizeDate } from '../utils/dateUtils';
@@ -144,6 +158,140 @@ function attributionSteps(state: {
  *
  * iOS-only; a no-op everywhere else.
  */
+/**
+ * Mirrors a Skip or ±15s pressed on the watch onto the phone's rest. The
+ * watch sends the rest's deadline before and after the change; it is applied
+ * only while the phone's rest still ends at that "before" deadline, give or
+ * take the transit time between the two clocks. A copy delivered twice then
+ * finds the rest already moved, and a late copy finds a different rest, and
+ * both are ignored rather than skipping or stretching the wrong one.
+ */
+const SAME_REST_TOLERANCE_MS = 3000;
+
+function applyWatchRestChange(payload: WatchRestChangedPayload): void {
+  const state = useActiveWorkoutStore.getState();
+  const { rest } = state;
+  if (
+    state.sessionId !== payload.sessionId ||
+    rest.state !== 'resting' ||
+    rest.endsAt == null ||
+    payload.previousEndsAt == null ||
+    Math.abs(rest.endsAt - payload.previousEndsAt) > SAME_REST_TOLERANCE_MS
+  ) {
+    return;
+  }
+  if (payload.endsAt == null) {
+    state.dismissRest();
+    return;
+  }
+  const deltaSec = Math.round((payload.endsAt - rest.endsAt) / 1000);
+  if (deltaSec !== 0) state.adjustRest(deltaSec);
+}
+
+/**
+ * A hold countdown or stopwatch started on the watch starts the phone's
+ * stopwatch from the same moment. Ignored for another session, a set already
+ * logged, or a start time that cannot be right (a stale queued message).
+ */
+const MAX_WATCH_TIMER_AGE_MS = 3 * 60 * 60 * 1000;
+/** Epoch-ms round trip through the watch is not exact to the millisecond. */
+const SAME_TIMER_RUN_MS = 20;
+
+/**
+ * A watch start the phone clock moved forward (`min(startedAt, now)`). The
+ * stop still names the watch's original start, so that pair is remembered
+ * until the phone timer is no longer the one that start created.
+ */
+const clampedWatchTimerStart = new Map<
+  string,
+  { raw: number; stored: number }
+>();
+
+function sameTimerRun(active: number, startedAt: number): boolean {
+  return Math.abs(active - startedAt) <= SAME_TIMER_RUN_MS;
+}
+
+function applyWatchSetTimerStart(payload: WatchSetTimerStartedPayload): void {
+  const state = useActiveWorkoutStore.getState();
+  const now = Date.now();
+  const reason =
+    state.sessionId !== payload.sessionId
+      ? 'another session'
+      : state.completedSetIds[payload.setId] != null
+        ? 'set already logged'
+        : !Number.isFinite(payload.startedAt)
+          ? 'bad start time'
+          : now - payload.startedAt > MAX_WATCH_TIMER_AGE_MS
+            ? 'too old'
+            : null;
+  if (reason != null) {
+    addLog(
+      `Watch timer start ignored: ${reason} (set ${payload.setId})`,
+      'INFO'
+    );
+    return;
+  }
+  // A queued start from an earlier arm of the same saved session must not
+  // start a timer in the workout that replaced it.
+  if (
+    payload.armedAt != null &&
+    state.watchArmedAt != null &&
+    Math.abs(payload.armedAt - state.watchArmedAt) > 2000
+  ) {
+    return;
+  }
+  const before = state.setTimerStartedAt[payload.setId];
+  const stored = Math.min(payload.startedAt, now);
+  state.startSetTimer(payload.setId, stored);
+  const after =
+    useActiveWorkoutStore.getState().setTimerStartedAt[payload.setId];
+  if (before == null && after != null) {
+    if (after !== payload.startedAt) {
+      clampedWatchTimerStart.set(payload.setId, {
+        raw: payload.startedAt,
+        stored: after,
+      });
+    } else {
+      clampedWatchTimerStart.delete(payload.setId);
+    }
+  }
+  addLog(`Watch started the timer for set ${payload.setId}`, 'DEBUG');
+}
+
+/** The wearer stopped the stopwatch on the watch: stop the phone's too. */
+function applyWatchSetTimerStop(payload: WatchSetTimerStoppedPayload): void {
+  const state = useActiveWorkoutStore.getState();
+  const active = state.setTimerStartedAt[payload.setId];
+  const clamped = clampedWatchTimerStart.get(payload.setId);
+  const sameRun =
+    active != null &&
+    Number.isFinite(payload.startedAt) &&
+    (sameTimerRun(active, payload.startedAt) ||
+      (clamped != null &&
+        clamped.stored === active &&
+        sameTimerRun(clamped.raw, payload.startedAt)));
+  if (
+    state.sessionId !== payload.sessionId ||
+    state.completedSetIds[payload.setId] != null ||
+    !Number.isFinite(payload.seconds) ||
+    payload.seconds <= 0 ||
+    !sameRun
+  ) {
+    addLog(
+      `Watch timer stop ignored (set ${payload.setId}, ${payload.seconds}s)`,
+      'INFO'
+    );
+    return;
+  }
+  clampedWatchTimerStart.delete(payload.setId);
+  // Drop the running phone timer, then keep the time the wrist measured.
+  state.clearSetTimer(payload.setId);
+  state.updateSetField(payload.setId, {
+    duration: Math.round(payload.seconds),
+  });
+  addLog(`Watch stopped the timer for set ${payload.setId}`, 'DEBUG');
+}
+
 export function useWatchWorkoutBridge(
   enabled: boolean,
   serverConnected: boolean = true,
@@ -151,6 +299,10 @@ export function useWatchWorkoutBridge(
   onWatchFinishedWorkout?: (celebration: WorkoutCelebration | null) => void
 ): void {
   const sessionsRef = useRef<Map<string, SessionTelemetry>>(new Map());
+  // Sessions the wearer discarded on the watch. A restore that was still
+  // loading, or a flush already walking its snapshot, must not bring their
+  // telemetry back and attach it to an entry that stays in the diary.
+  const discardedSessionsRef = useRef<Set<string>>(new Set());
   const onPendingChangeRef = useRef(onTelemetryPendingChange);
   const onWatchFinishedRef = useRef(onWatchFinishedWorkout);
   const pendingRef = useRef(false);
@@ -251,9 +403,16 @@ export function useWatchWorkoutBridge(
       const patch: ActiveSetPatch = {};
       if (payload.weightKg != null) patch.weight = payload.weightKg;
       if (payload.reps != null) patch.reps = payload.reps;
+      if (payload.duration != null)
+        patch.duration = Math.round(payload.duration);
+      if (payload.distanceKm != null) patch.distance = payload.distanceKm;
       if (Object.keys(patch).length > 0) {
         state.updateSetField(payload.setId, patch);
       }
+      // The watch has reported the duration it timed. The phone's own
+      // stopwatch for this set (started from the watch's) is done.
+      state.clearSetTimer(payload.setId);
+      clampedWatchTimerStart.delete(payload.setId);
 
       state.completeSet(
         payload.setId,
@@ -416,6 +575,18 @@ export function useWatchWorkoutBridge(
             energyByExercise.delete(exerciseEntryId);
         }
       }
+      // The newest reading goes straight to the active-workout screen; the
+      // rest of this handler only fills the upload buffer, which renders
+      // nothing. Live session only: a late drain for an ended workout has
+      // nothing on screen to update.
+      if (live) {
+        const newest = newestHeartRateSample(samplesByExercise);
+        if (newest) {
+          useLiveHeartRateStore
+            .getState()
+            .record({ sessionId: payload.sessionId, ...newest });
+        }
+      }
       for (const [exerciseEntryId, incoming] of samplesByExercise) {
         if (incoming.length === 0) continue;
         const existing = session.samples.get(exerciseEntryId) ?? [];
@@ -496,6 +667,10 @@ export function useWatchWorkoutBridge(
   // overwriting them with its last minute.
   const flushHeartRate = useCallback(async (): Promise<void> => {
     for (const [sessionId, session] of [...sessionsRef.current.entries()]) {
+      if (discardedSessionsRef.current.has(sessionId)) {
+        sessionsRef.current.delete(sessionId);
+        continue;
+      }
       if (!session.unposted) continue;
       // Cleared up front so a batch arriving mid-flush re-arms it rather than
       // being marked posted by this pass, which never saw it.
@@ -522,6 +697,8 @@ export function useWatchWorkoutBridge(
         // All absent means there is nothing to say; the server rejects that
         // body, so don't spend a request discovering it.
         if (!hrSamples && kcal == null && durationMinutes == null) continue;
+        // Discarded while an earlier entry of this session was posting.
+        if (discardedSessionsRef.current.has(sessionId)) break;
         try {
           await attachExerciseEntryWatchTelemetry(exerciseEntryId, {
             ...(hrSamples ? { hrSamples } : {}),
@@ -612,10 +789,78 @@ export function useWatchWorkoutBridge(
     [flushHeartRate]
   );
 
+  // The wearer discarded the workout on the watch. Same outcome as the
+  // phone's own Discard on a live-start workout: the heart rate buffered for
+  // the session is dropped rather than attached, the live session is cleared
+  // without saving, and a session this app created for the watch is removed
+  // from the diary. A session that already existed in the diary is only
+  // cleared, so discarding never deletes something the user logged earlier.
+  const handleWorkoutDiscard = useCallback(
+    async (payload: WatchWorkoutDiscardPayload): Promise<void> => {
+      const state = useActiveWorkoutStore.getState();
+      if (state.sessionId !== payload.sessionId) {
+        addLog(
+          `Watch workout-discard ignored: session ${payload.sessionId} is not the live one`,
+          'DEBUG'
+        );
+        return;
+      }
+      // A saved session can be armed again under the same id. A discard
+      // queued from the earlier arm must not clear the new one. An older
+      // watch sends no stamp, and that still matches.
+      if (
+        payload.armedAt != null &&
+        state.watchArmedAt != null &&
+        Math.abs(payload.armedAt - state.watchArmedAt) > 2000
+      ) {
+        addLog(
+          `Watch workout-discard ignored: session ${payload.sessionId} was re-armed`,
+          'DEBUG'
+        );
+        return;
+      }
+      const sessionId = state.sessionId;
+      const entryDate = entryDateOf(state.session);
+      const createdByLiveStart = state.createdByLiveStart;
+      discardedSessionsRef.current.add(sessionId);
+      sessionsRef.current.delete(sessionId);
+      syncPendingRef.current();
+      if (restoredRef.current) {
+        void writeWatchTelemetry(sessionsRef.current, ownerRef.current).catch(
+          () => undefined
+        );
+      }
+      state.clearWorkout({ discarded: true });
+      if (!createdByLiveStart) return;
+      try {
+        await deleteWorkout(sessionId);
+      } catch (error) {
+        addLog(
+          `Failed to delete workout discarded on the watch: ${String(error)}`,
+          'ERROR'
+        );
+        // Same notice the phone's own Discard gives: the workout is gone
+        // from the live session but still sits in the diary.
+        Toast.show({
+          type: 'error',
+          text1: i18n.t('workout.couldntDelete', {
+            defaultValue: "Couldn't delete workout",
+          }),
+          text2: i18n.t('workout.remainsInDiary', {
+            defaultValue: 'It remains in your diary.',
+          }),
+        });
+      }
+      if (entryDate != null) invalidateExerciseCache(queryClient, entryDate);
+    },
+    []
+  );
+
   const handlersRef = useRef({
     handleSetCompleted,
     handleHeartRateBatch,
     handleWorkoutStop,
+    handleWorkoutDiscard,
     flushHeartRate,
   });
   useEffect(() => {
@@ -623,6 +868,7 @@ export function useWatchWorkoutBridge(
       handleSetCompleted,
       handleHeartRateBatch,
       handleWorkoutStop,
+      handleWorkoutDiscard,
       flushHeartRate,
     };
     flushHeartRateRef.current = flushHeartRate;
@@ -640,6 +886,18 @@ export function useWatchWorkoutBridge(
         void handlersRef.current.handleSetCompleted(payload);
       }
     );
+    const restChangedSub = WatchConnectivity.addListener(
+      'onRestChanged',
+      applyWatchRestChange
+    );
+    const setTimerStartedSub = WatchConnectivity.addListener(
+      'onSetTimerStarted',
+      applyWatchSetTimerStart
+    );
+    const setTimerStoppedSub = WatchConnectivity.addListener(
+      'onSetTimerStopped',
+      applyWatchSetTimerStop
+    );
     const heartRateBatchSub = WatchConnectivity.addListener(
       'onHeartRateBatch',
       (payload) => {
@@ -653,9 +911,37 @@ export function useWatchWorkoutBridge(
       }
     );
 
+    // The wrist's current reading, ahead of the minute-old batch. Display
+    // only: nothing is buffered, so a dropped message costs nothing.
+    const liveHeartRateSub = WatchConnectivity.addListener(
+      'onLiveHeartRate',
+      (payload) => {
+        if (payload.sessionId !== useActiveWorkoutStore.getState().sessionId)
+          return;
+        if (!(payload.bpm > 0) || !Number.isFinite(payload.at)) return;
+        useLiveHeartRateStore.getState().record({
+          sessionId: payload.sessionId,
+          exerciseEntryId: payload.exerciseEntryId,
+          bpm: Math.round(payload.bpm),
+          at: payload.at,
+        });
+      }
+    );
+    const workoutDiscardSub = WatchConnectivity.addListener(
+      'onWorkoutDiscard',
+      (payload) => {
+        void handlersRef.current.handleWorkoutDiscard(payload);
+      }
+    );
+
     return () => {
+      workoutDiscardSub.remove();
       setCompletedSub.remove();
+      restChangedSub.remove();
+      setTimerStartedSub.remove();
+      setTimerStoppedSub.remove();
       heartRateBatchSub.remove();
+      liveHeartRateSub.remove();
       workoutStopSub.remove();
     };
   }, [enabled]);
@@ -828,6 +1114,9 @@ export function useWatchWorkoutBridge(
         saved,
         createSessionTelemetry
       );
+      for (const discarded of discardedSessionsRef.current) {
+        sessionsRef.current.delete(discarded);
+      }
       merged = true;
       // Subscribe before the hydrated check. A finish that lands in between
       // still runs the restore once, and not before the phone knows which
@@ -951,7 +1240,19 @@ export function useWatchWorkoutBridge(
     return useActiveWorkoutStore.subscribe((state, prevState) => {
       if (state.sessionId === prevState.sessionId) return;
       const ended = prevState.sessionId;
-      if (ended !== null) {
+      if (ended !== null && consumeWorkoutDiscarded(ended)) {
+        // Thrown away on the phone: the watch drops its workout without saving
+        // it to Health, and nothing it buffered is attached to a session that
+        // no longer exists.
+        discardedSessionsRef.current.add(ended);
+        sessionsRef.current.delete(ended);
+        syncPendingRef.current();
+        void WatchConnectivity?.stopWorkout(
+          ended,
+          new Date().toISOString(),
+          true
+        );
+      } else if (ended !== null) {
         const endedSession = sessionsRef.current.get(ended);
         if (endedSession) {
           endedSession.endedAt = Date.now();
@@ -962,13 +1263,22 @@ export function useWatchWorkoutBridge(
             activeSetId: prevState.activeSetId,
           };
         }
-        void WatchConnectivity?.stopWorkout(ended, new Date().toISOString());
+        void WatchConnectivity?.stopWorkout(
+          ended,
+          new Date().toISOString(),
+          false
+        );
         // Posts what has arrived so far. The watch answers that stop signal
         // with its own final drain, which lands afterwards and re-posts the
         // completed series — see `handleHeartRateBatch`.
         void handlersRef.current.flushHeartRate();
       }
-      if (state.sessionId !== null) track(state.sessionId, state.session);
+      if (state.sessionId !== null) {
+        // The same diary session can be opened again after a discard. Its
+        // new run is a fresh arm, so an old discard must not drop its data.
+        discardedSessionsRef.current.delete(state.sessionId);
+        track(state.sessionId, state.session);
+      }
     });
   }, [enabled, pruneSessions]);
 }

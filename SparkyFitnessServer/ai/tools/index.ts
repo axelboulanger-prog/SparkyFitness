@@ -29,6 +29,7 @@ import { buildGoalTools } from './goalTools.js';
 import { buildHabitTools } from './habitTools.js';
 import { buildMealPlanTools } from './mealPlansTools.js';
 import { buildMedicationTools } from './medicationTools.js';
+import { buildSymptomTools } from './symptomTools.js';
 import { ENABLE_TOOLS_TOOL_NAME, buildMetaTools } from './metaTools.js';
 import { buildProfileTools } from './profileTools.js';
 import { buildReportTools } from './reportTools.js';
@@ -100,6 +101,7 @@ const CATEGORY_BUILDERS: Record<
     (u, tz) => buildCheckinTools(u, tz),
     (u, tz) => buildProgressPhotoTools(u, tz),
     (u, tz) => buildSleepScienceTools(u, tz),
+    (u, tz) => buildSymptomTools(u, tz),
   ],
   goals: [(u, tz) => buildGoalTools(u, tz)],
   coaching: [

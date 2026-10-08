@@ -48,7 +48,7 @@ import {
 } from './medicationUtils';
 import ScheduleManager from './ScheduleManager';
 import TodayMedications from './TodayMedications';
-import SymptomDashboard from './SymptomDashboard';
+import SymptomsHub from '../Symptoms/SymptomsHub';
 import MedicationDisclaimer from './MedicationDisclaimer';
 import { formatScheduleDescription } from './medicationUtils';
 
@@ -719,11 +719,12 @@ export default function Medications() {
       )}
 
       {activeTab === 'symptoms' && (
-        <SymptomDashboard
+        <SymptomsHub
+          variant="medications"
           selectedDate={selectedDate}
-          today={today}
+          onDateChange={(d) => setSearchParams({ date: d })}
           meds={meds as MedicationDetail[]}
-          recentEntries={recentEntries}
+          recentMedicationEntries={recentEntries}
         />
       )}
     </div>

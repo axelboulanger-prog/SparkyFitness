@@ -652,7 +652,7 @@ describe('chatService', () => {
       expect(log).toHaveBeenCalledWith(
         'info',
         expect.stringMatching(
-          /Loaded 32\/53 active tools for chatbot \(profile=core/
+          /Loaded 33\/54 active tools for chatbot \(profile=core/
         )
       );
       // The core profile is the mitigation, so no context-window warning.
@@ -734,7 +734,7 @@ describe('chatService', () => {
       expect(log).toHaveBeenCalledWith(
         'info',
         expect.stringMatching(
-          /Loaded 53\/53 active tools for chatbot \(profile=full/
+          /Loaded 54\/54 active tools for chatbot \(profile=full/
         )
       );
       // Ollama + full profile is the risky combo, so warn about the 4096 default.
@@ -767,7 +767,7 @@ describe('chatService', () => {
       expect(log).toHaveBeenCalledWith(
         'info',
         expect.stringMatching(
-          /Loaded 53\/53 active tools for chatbot \(profile=full/
+          /Loaded 54\/54 active tools for chatbot \(profile=full/
         )
       );
     });
@@ -795,7 +795,7 @@ describe('chatService', () => {
       expect(log).toHaveBeenCalledWith(
         'info',
         expect.stringMatching(
-          /Loaded 53\/53 active tools for chatbot \(profile=full/
+          /Loaded 54\/54 active tools for chatbot \(profile=full/
         )
       );
       // The context-window warning is Ollama-only; cloud providers never see it.
@@ -1703,10 +1703,77 @@ describe('chatService', () => {
 
       expect(capturedUrl).toBe('https://api.perplexity.ai/v1/responses');
       expect(capturedBody.input).toEqual(messages);
+      expect(capturedBody.messages).toBeUndefined();
+      expect(capturedBody.preset).toBe('fast');
+      expect(capturedBody.model).toBeUndefined();
       expect(res.ok).toBe(true);
 
       const json = await res.json();
       expect(json.choices[0].message.content).toBe('Hello from Sonar');
+    });
+
+    it('converts multi-part messages with image_url and text to input_image and input_text', async () => {
+      let capturedBody: Record<string, unknown> = {};
+
+      const mockBaseFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+        capturedBody = JSON.parse((init?.body as string) || '{}');
+        return new Response(
+          JSON.stringify({
+            output_text: 'I see a banana.',
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      });
+
+      const perplexityFetch = chatService.createPerplexityFetch(
+        mockBaseFetch as typeof fetch
+      );
+      const res = await perplexityFetch(
+        'https://api.perplexity.ai/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'sonar',
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'image_url',
+                    image_url: { url: 'https://example.com/food.jpg' },
+                  },
+                  {
+                    type: 'text',
+                    text: 'Identify this food',
+                  },
+                ],
+              },
+            ],
+          }),
+        }
+      );
+
+      expect(capturedBody.messages).toBeUndefined();
+      expect(capturedBody.input).toEqual([
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'input_image',
+              image_url: 'https://example.com/food.jpg',
+            },
+            {
+              type: 'input_text',
+              text: 'Identify this food',
+            },
+          ],
+        },
+      ]);
+      expect(res.ok).toBe(true);
     });
 
     it('extracts text from nested output message content blocks in JSON responses', async () => {

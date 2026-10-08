@@ -30,8 +30,8 @@ export default function WorkoutCompleteWodCard({
     <View className="bg-surface rounded-xl shadow-sm px-3.5 py-3 mb-2 border border-border/40">
       <View className="flex-row items-center justify-between mb-1.5">
         <View className="flex-row items-center gap-1.5">
-          <View className="bg-primary/10 px-2 py-0.5 rounded-md">
-            <Text className="text-xs font-bold text-primary tracking-wide">
+          <View className="bg-accent-primary/10 px-2 py-0.5 rounded-md">
+            <Text className="text-xs font-bold text-accent-primary tracking-wide">
               {workoutFormat.toUpperCase().replace('_', ' ')}
             </Text>
           </View>
@@ -43,12 +43,16 @@ export default function WorkoutCompleteWodCard({
         {intervalStatus && (
           <View
             className={`px-2 py-0.5 rounded-md ${
-              intervalStatus === 'rx' ? 'bg-primary/20' : 'bg-amber-500/20'
+              intervalStatus === 'rx'
+                ? 'bg-accent-primary/20'
+                : 'bg-amber-500/20'
             }`}
           >
             <Text
               className={`text-xs font-bold ${
-                intervalStatus === 'rx' ? 'text-primary' : 'text-amber-500'
+                intervalStatus === 'rx'
+                  ? 'text-accent-primary'
+                  : 'text-amber-500'
               }`}
             >
               {intervalStatus.toUpperCase()}

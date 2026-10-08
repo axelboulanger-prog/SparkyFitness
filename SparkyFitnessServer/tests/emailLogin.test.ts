@@ -5,6 +5,17 @@ import request from 'supertest';
 import { emailLoginGuard } from '../middleware/emailLoginGuard.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isEmailLoginDisabled } from '../utils/emailLogin.js';
+import { log } from '../config/logging.js';
+
+const getGlobalSettings = vi.hoisted(() => vi.fn());
+vi.mock('../models/globalSettingsRepository.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('../models/globalSettingsRepository.js')
+    >();
+  return { ...actual, default: { ...actual.default, getGlobalSettings } };
+});
+vi.mock('../config/logging.js', () => ({ log: vi.fn() }));
 
 vi.mock('better-auth', async (importOriginal) => {
   const actual = await importOriginal<typeof import('better-auth')>();
@@ -30,6 +41,7 @@ vi.mock('better-auth', async (importOriginal) => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.clearAllMocks();
 });
 
 function setLoginEnv(force: string | undefined, disable: string | undefined) {
@@ -111,6 +123,10 @@ describe('email login environment precedence', () => {
     app.use((_req, res) => {
       res.sendStatus(204);
     });
+    const passwordLogin = (enabled: boolean) =>
+      getGlobalSettings.mockResolvedValue({
+        enable_email_password_login: enabled,
+      });
 
     it.each([
       '/api/auth/sign-in/email',
@@ -120,7 +136,8 @@ describe('email login environment precedence', () => {
       '/api/auth/sign-in/email?redirectTo=/diary',
       '/api/auth/sign-in/email/extra',
     ])('blocks %s when password login is disabled', async (path) => {
-      setLoginEnv('false', 'true');
+      setLoginEnv(undefined, undefined);
+      passwordLogin(false);
       const response = await request(app).post(path);
       expect(response.status).toBe(400);
       expect(response.body).toEqual({
@@ -129,35 +146,52 @@ describe('email login environment precedence', () => {
       });
     });
 
-    it.each(['/api/auth/sign-in/email', '/api/auth/sign-up/email'])(
-      'allows %s when FORCE overrides DISABLE',
-      async (path) => {
-        setLoginEnv('true', 'true');
-        expect((await request(app).post(path)).status).toBe(204);
-      }
-    );
-
-    it('allows password login by default', async () => {
+    it('allows password login when it is enabled', async () => {
       setLoginEnv(undefined, undefined);
+      passwordLogin(true);
       expect((await request(app).post('/api/auth/sign-in/email')).status).toBe(
         204
       );
     });
 
     it.each([
+      ['false', 'true', 400],
+      ['true', 'true', 204],
+      [undefined, undefined, 204],
+    ])(
+      'falls back to the environment (FORCE=%s DISABLE=%s) when settings cannot be read',
+      async (force, disable, status) => {
+        setLoginEnv(force, disable);
+        getGlobalSettings.mockRejectedValue(new Error('database away'));
+        expect(
+          (await request(app).post('/api/auth/sign-in/email')).status
+        ).toBe(status);
+        expect(log).toHaveBeenCalledWith(
+          'error',
+          expect.stringContaining('Could not read login settings'),
+          expect.any(Error)
+        );
+      }
+    );
+
+    it.each([
       '/api/auth/demo-login',
       '/api/auth/settings',
       '/api/auth/sign-in/sso',
+      '/api/auth/sign-in/email-otp',
+      '/api/auth/email-otp/send-verification-otp',
       '/api/foods',
     ])('leaves %s to its own handler', async (path) => {
       setLoginEnv('false', 'true');
       vi.stubEnv('SPARKY_FITNESS_DEMO_MODE', 'true');
+      passwordLogin(false);
       expect((await request(app).post(path)).status).toBe(204);
+      expect(getGlobalSettings).not.toHaveBeenCalled();
     });
 
     it('does not let demo mode open public password login', async () => {
-      setLoginEnv('false', 'true');
       vi.stubEnv('SPARKY_FITNESS_DEMO_MODE', 'true');
+      passwordLogin(false);
       expect((await request(app).post('/api/auth/sign-in/email')).status).toBe(
         400
       );

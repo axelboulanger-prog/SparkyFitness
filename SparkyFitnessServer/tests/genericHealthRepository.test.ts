@@ -120,7 +120,7 @@ describe('Generic Health & Workout Telemetry Repositories', () => {
       ),
       expect.arrayContaining([totalCaloriesCapturedAt])
     );
-    expect(mockQuery.mock.calls[0]?.[1]).toHaveLength(45);
+    expect(mockQuery.mock.calls[0]?.[1]).toHaveLength(46);
     expect(mockQuery.mock.calls[0]?.[1]?.[12]).toEqual(totalCaloriesCapturedAt);
   });
 

@@ -7,6 +7,10 @@ import requireSelfActor from '../middleware/requireSelfMiddleware.js';
 import authMiddleware from '../middleware/authMiddleware.js';
 import checkPermissionMiddleware from '../middleware/checkPermissionMiddleware.js';
 import { CallbackBodySchema, SyncBodySchema } from '../schemas/ouraSchemas.js';
+import {
+  SYNC_ALREADY_RUNNING_RESPONSE,
+  startProviderSync,
+} from '../services/providerSyncClaim.js';
 const router = express.Router();
 /**
  * @swagger
@@ -122,14 +126,23 @@ router.post(
         'info',
         `[ouraRoutes] Manual sync triggered for user ${userId}${startDate ? ` from ${startDate}` : ''}${endDate ? ` to ${endDate}` : ''}${dataSource ? ` (Source: ${dataSource})` : ''}`
       );
-      await ouraService.syncOuraData(
-        userId,
-        'manual',
-        startDate,
-        endDate,
-        dataSource,
-        saveMockData
+      const started = await startProviderSync(
+        { userId, providerType: 'oura' },
+        () =>
+          ouraService.syncOuraData(
+            userId,
+            'manual',
+            startDate,
+            endDate,
+            dataSource,
+            saveMockData
+          )
       );
+      if (!started) {
+        res.status(409).json(SYNC_ALREADY_RUNNING_RESPONSE);
+        return;
+      }
+      await started.running;
       res
         .status(200)
         .json({ message: 'Oura data sync completed successfully.' });

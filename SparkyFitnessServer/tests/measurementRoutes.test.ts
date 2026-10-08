@@ -9,8 +9,14 @@ import measurementRoutes from '../routes/measurementRoutes.js';
 vi.mock('../services/measurementService.js', () => ({
   default: {
     processHealthData: vi.fn(),
+    getWaterIntake: vi.fn(),
     getWaterIntakeByDateRange: vi.fn(),
+    getCheckInMeasurements: vi.fn(),
+    getLatestCheckInMeasurementsOnOrBeforeDate: vi.fn(),
+    getCustomMeasurementEntriesByDate: vi.fn(),
     getLatestManualCustomEntriesOnOrBeforeDate: vi.fn(),
+    getCheckInMeasurementsByDateRange: vi.fn(),
+    getCustomMeasurementsByDateRange: vi.fn(),
   },
 }));
 
@@ -293,6 +299,210 @@ describe('Measurement Routes - GET /api/measurements/water-intake-range/:startDa
     );
 
     expect(res.statusCode).toBe(500);
+  });
+});
+
+describe('Measurement Routes - GET /api/measurements/water-intake/:date', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns the service result with 200 for a valid date', async () => {
+    const waterTotals = {
+      water_ml: 750,
+      manual_ml: 750,
+      ledger_ml: 750,
+      food_ml: 0,
+    };
+    vi.mocked(measurementService.getWaterIntake).mockResolvedValue(waterTotals);
+
+    const res = await request(app).get(
+      '/api/measurements/water-intake/2026-08-30'
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual(waterTotals);
+  });
+
+  it('rejects a malformed date with 400 before reaching the service', async () => {
+    const res = await request(app).get(
+      '/api/measurements/water-intake/not-a-date'
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(measurementService.getWaterIntake).not.toHaveBeenCalled();
+  });
+
+  it('rejects a well-formed but impossible date with 400', async () => {
+    const res = await request(app).get(
+      '/api/measurements/water-intake/2026-02-30'
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(measurementService.getWaterIntake).not.toHaveBeenCalled();
+  });
+});
+
+describe('Measurement Routes - GET /api/measurements/check-in/:date', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns the service result with 200 for a valid date', async () => {
+    vi.mocked(measurementService.getCheckInMeasurements).mockResolvedValue({
+      weight: 72.5,
+    });
+
+    const res = await request(app).get('/api/measurements/check-in/2026-08-30');
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ weight: 72.5 });
+  });
+
+  it('rejects a malformed date with 400 before reaching the service', async () => {
+    const res = await request(app).get('/api/measurements/check-in/not-a-date');
+
+    expect(res.statusCode).toBe(400);
+    expect(measurementService.getCheckInMeasurements).not.toHaveBeenCalled();
+  });
+
+  it('rejects a well-formed but impossible date with 400', async () => {
+    const res = await request(app).get('/api/measurements/check-in/2026-02-30');
+
+    expect(res.statusCode).toBe(400);
+    expect(measurementService.getCheckInMeasurements).not.toHaveBeenCalled();
+  });
+});
+
+describe('Measurement Routes - GET /api/measurements/check-in/latest-on-or-before-date', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns the service result with 200 for a valid date', async () => {
+    vi.mocked(
+      measurementService.getLatestCheckInMeasurementsOnOrBeforeDate
+    ).mockResolvedValue({ weight: 72.5 });
+
+    const res = await request(app).get(
+      '/api/measurements/check-in/latest-on-or-before-date?date=2026-08-30'
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ weight: 72.5 });
+  });
+
+  it('rejects a malformed date query param with 400 before reaching the service', async () => {
+    const res = await request(app).get(
+      '/api/measurements/check-in/latest-on-or-before-date?date=not-a-date'
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(
+      measurementService.getLatestCheckInMeasurementsOnOrBeforeDate
+    ).not.toHaveBeenCalled();
+  });
+});
+
+describe('Measurement Routes - GET /api/measurements/custom-entries/:date', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns the service result with 200 for a valid date', async () => {
+    vi.mocked(
+      measurementService.getCustomMeasurementEntriesByDate
+    ).mockResolvedValue([]);
+
+    const res = await request(app).get(
+      '/api/measurements/custom-entries/2026-08-30'
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it('rejects a malformed date with 400 before reaching the service', async () => {
+    const res = await request(app).get(
+      '/api/measurements/custom-entries/not-a-date'
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(
+      measurementService.getCustomMeasurementEntriesByDate
+    ).not.toHaveBeenCalled();
+  });
+});
+
+describe('Measurement Routes - GET /api/measurements/check-in-measurements-range/:startDate/:endDate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns the service result with 200 for a valid range', async () => {
+    vi.mocked(
+      measurementService.getCheckInMeasurementsByDateRange
+    ).mockResolvedValue([{ entry_date: '2026-08-30', weight: 72.5 }]);
+
+    const res = await request(app).get(
+      '/api/measurements/check-in-measurements-range/2026-08-01/2026-08-30'
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual([{ entry_date: '2026-08-30', weight: 72.5 }]);
+  });
+
+  it('rejects a malformed startDate with 400 before reaching the service', async () => {
+    const res = await request(app).get(
+      '/api/measurements/check-in-measurements-range/not-a-date/2026-08-30'
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toContain('startDate');
+    expect(
+      measurementService.getCheckInMeasurementsByDateRange
+    ).not.toHaveBeenCalled();
+  });
+
+  it('rejects a well-formed but impossible date with 400', async () => {
+    const res = await request(app).get(
+      '/api/measurements/check-in-measurements-range/2026-02-30/2026-08-30'
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(
+      measurementService.getCheckInMeasurementsByDateRange
+    ).not.toHaveBeenCalled();
+  });
+});
+
+describe('Measurement Routes - GET /api/measurements/custom-measurements-range/:categoryId/:startDate/:endDate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns the service result with 200 for a valid range', async () => {
+    vi.mocked(
+      measurementService.getCustomMeasurementsByDateRange
+    ).mockResolvedValue([]);
+
+    const res = await request(app).get(
+      '/api/measurements/custom-measurements-range/cat-1/2026-08-01/2026-08-30'
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it('rejects a malformed startDate with 400 before reaching the service', async () => {
+    const res = await request(app).get(
+      '/api/measurements/custom-measurements-range/cat-1/not-a-date/2026-08-30'
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(
+      measurementService.getCustomMeasurementsByDateRange
+    ).not.toHaveBeenCalled();
   });
 });
 

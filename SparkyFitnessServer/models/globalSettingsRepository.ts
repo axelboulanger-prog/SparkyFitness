@@ -29,6 +29,23 @@ async function getGlobalSettings() {
     ) {
       settings.enable_email_password_login = true;
     }
+    // Manage enable_passkey_login
+    const forcePasskeyLogin =
+      process.env.SPARKY_FITNESS_FORCE_PASSKEY_LOGIN === 'true';
+    const disablePasskeyLogin =
+      process.env.SPARKY_FITNESS_DISABLE_PASSKEY_LOGIN === 'true';
+    settings.is_passkey_login_env_configured =
+      forcePasskeyLogin || disablePasskeyLogin;
+    if (forcePasskeyLogin) {
+      settings.enable_passkey_login = true;
+    } else if (disablePasskeyLogin) {
+      settings.enable_passkey_login = false;
+    } else if (
+      settings.enable_passkey_login === undefined ||
+      settings.enable_passkey_login === null
+    ) {
+      settings.enable_passkey_login = true;
+    }
     // Manage is_oidc_active
     settings.is_oidc_active_env_configured = oidcAuthEnabledEnv;
     if (oidcAuthEnabledEnv) {
@@ -76,10 +93,20 @@ async function saveGlobalSettings(settings: any) {
       settings.allow_user_ai_config !== undefined
         ? settings.allow_user_ai_config
         : true;
+    // While an env var forces a login setting, keep the stored admin choice:
+    // the admin page sends back the forced value on every unrelated save.
+    const emailLoginEnvForced =
+      process.env.SPARKY_FITNESS_FORCE_EMAIL_LOGIN === 'true' ||
+      process.env.SPARKY_FITNESS_DISABLE_EMAIL_LOGIN === 'true';
+    const oidcEnvForced =
+      process.env.SPARKY_FITNESS_OIDC_AUTH_ENABLED === 'true';
+    const passkeyEnvForced =
+      process.env.SPARKY_FITNESS_FORCE_PASSKEY_LOGIN === 'true' ||
+      process.env.SPARKY_FITNESS_DISABLE_PASSKEY_LOGIN === 'true';
     await client.query(
       `UPDATE global_settings
-             SET enable_email_password_login = $1,
-                 is_oidc_active = $2,
+             SET enable_email_password_login = COALESCE($1, enable_email_password_login),
+                 is_oidc_active = COALESCE($2, is_oidc_active),
                  mfa_mandatory = $3,
                  allow_user_ai_config = COALESCE($4, allow_user_ai_config, true),
                  default_vision_ai_service_id = CASE WHEN $6 THEN $5 ELSE default_vision_ai_service_id END,
@@ -88,12 +115,15 @@ async function saveGlobalSettings(settings: any) {
                  allow_private_network_food_providers = COALESCE($9, allow_private_network_food_providers, false),
                  public_api_docs = COALESCE($10, public_api_docs, false),
                  dev_tools_enabled = COALESCE($11, dev_tools_enabled, false),
-                 mock_data_enabled = COALESCE($12, mock_data_enabled, false)
+                 mock_data_enabled = COALESCE($12, mock_data_enabled, false),
+                 enable_passkey_login = COALESCE($13, enable_passkey_login, true)
              WHERE id = 1
              RETURNING *`,
       [
-        settings.enable_email_password_login,
-        settings.is_oidc_active,
+        emailLoginEnvForced
+          ? null
+          : (settings.enable_email_password_login ?? null),
+        oidcEnvForced ? null : (settings.is_oidc_active ?? null),
         settings.is_mfa_mandatory,
         allowUserAiConfig,
         settings.default_vision_ai_service_id ?? null,
@@ -104,6 +134,7 @@ async function saveGlobalSettings(settings: any) {
         settings.public_api_docs ?? null,
         settings.dev_tools_enabled ?? null,
         settings.mock_data_enabled ?? null,
+        passkeyEnvForced ? null : (settings.enable_passkey_login ?? null),
       ]
     );
     // Return the full truth (DB + ENV overrides)

@@ -26,6 +26,7 @@ jest.mock('react-native-safe-area-context', () => ({
 jest.mock('uniwind', () => ({
   useCSSVariable: (keys: string | string[]) =>
     Array.isArray(keys) ? keys.map(() => '#111827') : '#111827',
+  useUniwind: () => ({ theme: 'light' }),
 }));
 // The chart draws with Skia; its data handling is covered by the hook tests.
 jest.mock('../../src/components/exerciseStats/HeartRateChart', () => {

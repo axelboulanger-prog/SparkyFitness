@@ -54,6 +54,25 @@ export const formatChartYLabel = (value: number): string =>
       }).format(value)
     : formatLocalizedNumber(value);
 
+/** Small gap so the widest label doesn't sit flush against the plot. */
+export const LABEL_COLUMN_GAP = 6;
+
+/**
+ * The widest of the given labels as drawn in the axis font, plus a small gap. Used to size a
+ * chart's y-axis label column to what its labels actually draw, instead of a flat guess that
+ * can leave the widest label crammed against the plot or the narrowest floating in leftover
+ * space to its left.
+ */
+export const measureLabelColumnWidth = (
+  labels: string[],
+  measureText: (text: string) => number,
+  fallbackWidth: number
+): number => {
+  if (labels.length === 0) return fallbackWidth;
+  const widest = Math.max(...labels.map((label) => measureText(label)));
+  return Math.ceil(widest) + LABEL_COLUMN_GAP;
+};
+
 export const CHART_Y_TICK_COUNT = 5;
 
 /**

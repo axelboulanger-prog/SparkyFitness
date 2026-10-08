@@ -12,6 +12,7 @@ import type {
   AggregatedSleepSession,
   TransformedNutritionEntry,
 } from '../../../src/types/healthRecords';
+import { atLocalTime } from '../../helpers/localTime';
 
 jest.mock('../../../src/services/LogService', () => ({
   addLog: jest.fn(),
@@ -74,7 +75,10 @@ describe('transformHealthRecords', () => {
   describe('Weight records', () => {
     test('extracts value from record.weight.inKilograms', () => {
       const records = [
-        { time: '2024-01-15T08:00:00Z', weight: { inKilograms: 75.5 } },
+        {
+          time: atLocalTime('2024-01-15', '08:00'),
+          weight: { inKilograms: 75.5 },
+        },
       ];
       const result = transformHealthRecords(records, {
         recordType: 'Weight',
@@ -125,7 +129,7 @@ describe('transformHealthRecords', () => {
     test('splits into separate systolic and diastolic records', () => {
       const records = [
         {
-          time: '2024-01-15T08:00:00Z',
+          time: atLocalTime('2024-01-15', '08:00'),
           systolic: { inMillimetersOfMercury: 120.5 },
           diastolic: { inMillimetersOfMercury: 80.3 },
         },
@@ -309,7 +313,7 @@ describe('transformHealthRecords', () => {
 
   describe('HeartRateVariabilitySDNN records', () => {
     test('extracts SDNN value from record.value with record.time date', () => {
-      const records = [{ time: '2024-01-15T08:00:00Z', value: 42 }];
+      const records = [{ time: atLocalTime('2024-01-15', '08:00'), value: 42 }];
       const result = transformHealthRecords(records, {
         recordType: 'HeartRateVariabilitySDNN',
         unit: 'ms',
@@ -448,6 +452,7 @@ describe('transformHealthRecords', () => {
       const workoutResult = result[0] as TransformedExerciseSession;
       expect(workoutResult.activityType).toBe('Running');
       expect(workoutResult.title).toBe('Running');
+      expect(workoutResult.exercise_source_id).toBe('37');
     });
 
     test('skips a workout our own watch app wrote', () => {
@@ -677,7 +682,10 @@ describe('transformHealthRecords', () => {
   describe('date extraction', () => {
     test('uses record.time for raw quantity samples (Weight)', () => {
       const records = [
-        { time: '2024-01-15T08:00:00Z', weight: { inKilograms: 75 } },
+        {
+          time: atLocalTime('2024-01-15', '08:00'),
+          weight: { inKilograms: 75 },
+        },
       ];
       const result = transformHealthRecords(records, {
         recordType: 'Weight',
@@ -692,7 +700,10 @@ describe('transformHealthRecords', () => {
 
     test('uses record.startTime for session-type records (Distance)', () => {
       const records = [
-        { startTime: '2024-01-15T08:00:00Z', distance: { inMeters: 1000 } },
+        {
+          startTime: atLocalTime('2024-01-15', '08:00'),
+          distance: { inMeters: 1000 },
+        },
       ];
       const result = transformHealthRecords(records, {
         recordType: 'Distance',

@@ -32,9 +32,11 @@ import {
   getSourceLabel,
   getWorkoutSummary,
   getExerciseVolumeKg,
+  hasBodyweightExercise,
   formatVolume,
   canReorderDraftExercises,
   exerciseFromSnapshot,
+  parseSetWeight,
   summarizeWorkoutHeartRate,
 } from '../utils/workoutSession';
 import { formatLocalizedNumber } from '../localization';
@@ -59,6 +61,8 @@ import CalendarSheet, {
 } from '../components/CalendarSheet';
 import { normalizeDate, formatDate, formatDateLabel } from '../utils/dateUtils';
 import { parseDecimalInput } from '../utils/numericInput';
+import { useBodyWeightKg } from '../hooks/useBodyWeightKg';
+import { weightFromKg } from '../utils/unitConversions';
 import Toast from 'react-native-toast-message';
 import { addLog } from '../services/LogService';
 import { extractActivitySummary } from '../utils/activityDetails';
@@ -82,9 +86,16 @@ import {
 import { useSupersetBorders } from '../components/ActiveWorkoutRail';
 import type { RootStackScreenProps } from '../types/navigation';
 import type { UpdatePresetSessionRequest } from '@workspace/shared';
-import { canEditGroupedWorkout } from '@workspace/shared';
+import {
+  canEditGroupedWorkout,
+  effectiveLoadKg,
+  isBodyweightModality,
+  resolveExerciseModality,
+} from '@workspace/shared';
 import { buildExerciseReplaceContext } from '../utils/exerciseReplace';
 import WorkoutFeedbackCard from '../components/WorkoutFeedbackCard';
+import HeartRateZones from '../components/exerciseStats/HeartRateZones';
+import { useWorkoutHeartRateZones } from '../hooks/useWorkoutHeartRateZones';
 
 type Props = RootStackScreenProps<'WorkoutDetail'>;
 
@@ -94,6 +105,9 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
     ? 'pl-PL'
     : 'en-US';
   const [session, setSession] = useState(route.params.session);
+  // Time in each zone across the whole workout, from the zones the watch
+  // stored per exercise. Null for a workout logged without one.
+  const heartRateZones = useWorkoutHeartRateZones(session.exercises);
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
   const { preferences } = usePreferences();
@@ -171,7 +185,7 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
       // clear the active state so the bar doesn't keep referencing a session
       // that no longer exists on the server.
       if (useActiveWorkoutStore.getState().sessionId === session.id) {
-        useActiveWorkoutStore.getState().clearWorkout();
+        useActiveWorkoutStore.getState().clearWorkout({ discarded: true });
       }
       navigation.goBack();
     },
@@ -209,6 +223,21 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
     populate,
     exercisesModifiedRef,
   } = useWorkoutForm({ isEditMode: true, skipDraftLoad: true });
+  const bodyWeightKg = useBodyWeightKg(
+    isEditing
+      ? normalizeDate(formState.entryDate) || null
+      : normalizedDate || null,
+    isEditing
+      ? formState.exercises.some((exercise) =>
+          isBodyweightModality(
+            resolveExerciseModality(
+              exercise.exerciseModality,
+              exercise.exerciseCategory
+            )
+          )
+        )
+      : hasBodyweightExercise(session.exercises)
+  );
   const submission = useMemo(
     () =>
       getWorkoutDraftSubmission(
@@ -524,6 +553,7 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
             activeSetId={null}
             metricColumn={metricColumn}
             weightUnit={weightUnit as 'kg' | 'lbs'}
+            entryDate={normalizedDate || null}
             distanceUnit={distanceUnit}
             getImageSource={getImageSource}
             excludePresetEntryId={session.id}
@@ -606,13 +636,34 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
       ? formState.exercises.reduce(
           (sum, ex) =>
             ex.sets.reduce((s, set) => {
-              const w = parseDecimalInput(set.weight);
+              const w = parseSetWeight(
+                set.weight,
+                resolveExerciseModality(
+                  ex.exerciseModality,
+                  ex.exerciseCategory
+                )
+              );
               const r = parseInt(set.reps, 10);
-              return s + (isNaN(w) || isNaN(r) ? 0 : w * r);
+              if (isNaN(r)) return s;
+              // Draft weights are in the display unit, so body weight is too.
+              const load = effectiveLoadKg(
+                isNaN(w) ? null : w,
+                resolveExerciseModality(
+                  ex.exerciseModality,
+                  ex.exerciseCategory
+                ),
+                bodyWeightKg == null
+                  ? null
+                  : weightFromKg(bodyWeightKg, weightUnit as 'kg' | 'lbs')
+              );
+              return s + load * r;
             }, sum),
           0
         )
-      : session.exercises.reduce((sum, ex) => sum + getExerciseVolumeKg(ex), 0);
+      : session.exercises.reduce(
+          (sum, ex) => sum + getExerciseVolumeKg(ex, bodyWeightKg),
+          0
+        );
     const totalCalories = isEditing
       ? formState.exercises.reduce((sum, ex) => {
           const cal = parseDecimalInput(ex.calories ?? '');
@@ -896,6 +947,17 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
 
         {/* Summary card */}
         {renderSummaryCard()}
+
+        {heartRateZones && !isEditing ? (
+          <View className="bg-surface rounded-xl p-4 mt-4">
+            <Text className="text-base font-semibold text-text-primary mb-3">
+              {t('exerciseStatistics.cardio.zones', {
+                defaultValue: 'Heart Rate Zones',
+              })}
+            </Text>
+            <HeartRateZones zones={heartRateZones} />
+          </View>
+        ) : null}
 
         {/* Start Workout button */}
         {!isEditing && canEdit && !isWorkoutActive && (

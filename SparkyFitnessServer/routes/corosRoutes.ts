@@ -16,6 +16,11 @@ import {
   SyncBodySchema,
   DisconnectBodySchema,
 } from '../schemas/corosSchemas.js';
+import {
+  SYNC_ALREADY_RUNNING_RESPONSE,
+  syncClaimTarget,
+  startProviderSync,
+} from '../services/providerSyncClaim.js';
 
 const router = express.Router();
 
@@ -236,15 +241,24 @@ router.post(
         `[corosRoutes] Manual sync triggered for user ${userId}${startDate ? ` from ${startDate}` : ''}${endDate ? ` to ${endDate}` : ''}${dataSource ? ` (Source: ${dataSource})` : ''}`
       );
 
-      const syncResult = await corosService.syncCorosData(
-        userId,
-        'manual',
-        providerId || null,
-        startDate || null,
-        endDate || null,
-        dataSource,
-        saveMockData
+      const started = await startProviderSync(
+        syncClaimTarget(userId, 'coros_mcp', providerId),
+        () =>
+          corosService.syncCorosData(
+            userId,
+            'manual',
+            providerId || null,
+            startDate || null,
+            endDate || null,
+            dataSource,
+            saveMockData
+          )
       );
+      if (!started) {
+        res.status(409).json(SYNC_ALREADY_RUNNING_RESPONSE);
+        return;
+      }
+      const syncResult = await started.running;
 
       res.status(200).json({
         message: 'COROS data sync completed successfully.',

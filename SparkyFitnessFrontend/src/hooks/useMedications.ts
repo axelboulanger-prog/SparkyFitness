@@ -63,10 +63,14 @@ const invalidateDiaryTotals = (queryClient: QueryClient) => {
 
 // --- Queries ---------------------------------------------------------------
 
-export const useMedications = (opts?: ListMedicationsOptions) =>
+export const useMedications = (
+  opts?: ListMedicationsOptions,
+  options?: { enabled?: boolean }
+) =>
   useQuery({
     queryKey: medKeys.list(opts),
     queryFn: () => medicationService.listMedications(opts),
+    enabled: options?.enabled ?? true,
     meta: { errorMessage: 'Failed to load medications.' },
   });
 

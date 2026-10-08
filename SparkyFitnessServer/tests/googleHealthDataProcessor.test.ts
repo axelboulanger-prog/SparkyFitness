@@ -57,6 +57,7 @@ import measurementRepository from '../models/measurementRepository.js';
 import sleepRepository from '../models/sleepRepository.js';
 import exerciseRepository from '../models/exercise.js';
 import exerciseEntryRepository from '../models/exerciseEntry.js';
+import activityDetailsRepository from '../models/activityDetailsRepository.js';
 
 const UID = 'user-1';
 const CID = 'user-1';
@@ -358,8 +359,20 @@ describe('processGoogleActivities — duration units', () => {
         sets: [expect.objectContaining({ duration: 3600 })],
       }),
       CID,
-      'Google Health'
+      'Google Health',
+      null,
+      {
+        // Written with the entry, so a re-sync replaces it instead of adding
+        // another copy.
+        activityDetail: expect.objectContaining({
+          provider_name: 'Google Health',
+          detail_type: 'full_activity_data',
+        }),
+      }
     );
+    expect(
+      activityDetailsRepository.createActivityDetail
+    ).not.toHaveBeenCalled();
   });
 });
 

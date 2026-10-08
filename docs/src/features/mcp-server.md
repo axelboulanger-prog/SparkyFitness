@@ -81,7 +81,8 @@ Because the AI has access to all these tools, it can do things a standard app ca
 
 1.  **User Isolation (RLS)**: Normal MCP tools are restricted by PostgreSQL **Row Level Security**, scoped to the user authenticated by the API key. The AI can _only_ see data belonging to that user.
 2.  **Admin-Only Dev Tools**: A small set of optional developer/debugging tools is **off by default**. They require an admin API key, plus either the **Admin > System Settings** toggle or the `DEV_TOOLS_ENABLED=true` environment variable, which forces them on regardless of the stored setting. These tools intentionally run with elevated database access (the owner pool, bypassing Row Level Security), so leave them disabled unless you are actively debugging.
-3.  **Local First**: If you run SparkyFitness locally, your data never leaves your infrastructure until you send it to your chosen AI provider (e.g., Anthropic or OpenAI).
+3.  **Read-only API keys**: Choose **Access: Read-only** when you generate a key for a client that should only read your data. Such a key only gets the tools that read, and tools that both read and write (such as `sparky_manage_food`) refuse their write actions. Outside MCP it can only make read requests. Keys created before this option existed keep full access.
+4.  **Local First**: If you run SparkyFitness locally, your data never leaves your infrastructure until you send it to your chosen AI provider (e.g., Anthropic or OpenAI).
 
 ## 🚀 Getting Started
 
@@ -89,7 +90,7 @@ The MCP server is served **in-process** by the main SparkyFitness server at `POS
 
 ### 1. Generate an API Key
 
-Go to **Settings → Developer & Integrations → API Key Management** in the web UI and generate a key. You'll pass this as a **Bearer Token** in the `Authorization` header.
+Go to **Settings → Developer & Integrations → API Key Management** in the web UI and generate a key. Pick **Read-only** under **Access** if the assistant should only read your data. You'll pass this as a **Bearer Token** in the `Authorization` header.
 
 ### 2. Find Your MCP Endpoint
 

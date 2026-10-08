@@ -64,6 +64,7 @@ const Auth = () => {
 
   const queryClient = useQueryClient();
   const { data: loginSettings } = useAuthSettings();
+  const passkeyEnabled = loginSettings?.passkey?.enabled !== false;
   const { mutateAsync: loginUser } = useLoginUserMutation();
   const { mutateAsync: demoLogin, isPending: isDemoLoginPending } =
     useDemoLoginMutation();
@@ -147,7 +148,14 @@ const Auth = () => {
 
   useEffect(() => {
     // Only attempt if not already logged in, and only ever once per mount.
-    if (authUser || authLoading || passkeyAutofillStartedRef.current) {
+    // Wait for the login settings so autofill never starts when passkeys are off.
+    if (
+      authUser ||
+      authLoading ||
+      !loginSettings ||
+      !passkeyEnabled ||
+      passkeyAutofillStartedRef.current
+    ) {
       return;
     }
 
@@ -227,7 +235,7 @@ const Auth = () => {
     };
 
     initPasskeyAutofill();
-  }, [authUser, authLoading, navigate]);
+  }, [authUser, authLoading, loginSettings, passkeyEnabled, navigate]);
 
   const triggerMfaChallenge = useCallback(
     async (
@@ -577,15 +585,17 @@ const Auth = () => {
                         </span>
                       </div>
                     </div>
-                    <Button
-                      variant="outline"
-                      className="w-full bg-primary/5 hover:bg-primary/10 border-primary/20 flex items-center justify-center mb-2"
-                      onClick={handlePasskeySignIn}
-                      disabled={loading}
-                    >
-                      <Fingerprint className="h-4 w-4 mr-2 text-primary" /> Sign
-                      in with Passkey
-                    </Button>
+                    {passkeyEnabled && (
+                      <Button
+                        variant="outline"
+                        className="w-full bg-primary/5 hover:bg-primary/10 border-primary/20 flex items-center justify-center mb-2"
+                        onClick={handlePasskeySignIn}
+                        disabled={loading}
+                      >
+                        <Fingerprint className="h-4 w-4 mr-2 text-primary" />{' '}
+                        Sign in with Passkey
+                      </Button>
+                    )}
                     <Button
                       variant="outline"
                       className="w-full dark:bg-gray-800 dark:hover:bg-gray-600 flex items-center justify-center mb-2"
@@ -706,27 +716,30 @@ const Auth = () => {
                 </Tabs>
               ) : (
                 <div className="space-y-4">
-                  {/* Passkey is always available */}
-                  <Button
-                    variant="outline"
-                    className="w-full dark:bg-gray-800 dark:hover:bg-gray-600 flex items-center justify-center"
-                    onClick={handlePasskeySignIn}
-                    disabled={loading}
-                  >
-                    <Fingerprint className="h-4 w-4 mr-2 text-primary" /> Sign
-                    in with Passkey
-                  </Button>
+                  {passkeyEnabled && (
+                    <Button
+                      variant="outline"
+                      className="w-full dark:bg-gray-800 dark:hover:bg-gray-600 flex items-center justify-center"
+                      onClick={handlePasskeySignIn}
+                      disabled={loading}
+                    >
+                      <Fingerprint className="h-4 w-4 mr-2 text-primary" /> Sign
+                      in with Passkey
+                    </Button>
+                  )}
 
                   {loginSettings?.oidc?.enabled &&
                     loginSettings.oidc.providers?.length > 0 && (
                       <>
-                        <div className="flex items-center my-4">
-                          <div className="flex-grow border-t border-gray-300 dark:border-gray-700"></div>
-                          <span className="flex-shrink mx-4 text-gray-400 text-xs uppercase">
-                            Or sign in with
-                          </span>
-                          <div className="flex-grow border-t border-gray-300 dark:border-gray-700"></div>
-                        </div>
+                        {passkeyEnabled && (
+                          <div className="flex items-center my-4">
+                            <div className="flex-grow border-t border-gray-300 dark:border-gray-700"></div>
+                            <span className="flex-shrink mx-4 text-gray-400 text-xs uppercase">
+                              Or sign in with
+                            </span>
+                            <div className="flex-grow border-t border-gray-300 dark:border-gray-700"></div>
+                          </div>
+                        )}
                         <div className="space-y-2">
                           {loginSettings.oidc.providers.map((provider) => (
                             <Button

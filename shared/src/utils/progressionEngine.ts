@@ -4,6 +4,15 @@ import {
   ProgressionEvaluationResult,
 } from "../types/progression.ts";
 
+/**
+ * Two decimals: enough for any plate step in kg or lb, and it keeps float
+ * noise from adding a weight and an increment (92.8 + 2.5) out of the
+ * suggestion and the message it is quoted in.
+ */
+function roundSuggestedWeight(weight: number): number {
+  return Math.round(weight * 100) / 100;
+}
+
 export function evaluateProgression(
   config: ExerciseProgressionConfig,
   lastPerformance?: LastExercisePerformance | null
@@ -58,7 +67,9 @@ export function evaluateProgression(
 
     if (goalAchieved) {
       if (config.incrementType === "weight") {
-        const newWeight = lastPerformance.baseWeight + config.incrementValue;
+        const newWeight = roundSuggestedWeight(
+          lastPerformance.baseWeight + config.incrementValue
+        );
         return {
           goalAchieved: true,
           status: "PROGRESSION_WEIGHT_INCREASE",
@@ -114,7 +125,9 @@ export function evaluateProgression(
 
     // Mode: rep_goal with weight increment
     if (config.incrementType === "weight") {
-      const newWeight = lastPerformance.baseWeight + config.incrementValue;
+      const newWeight = roundSuggestedWeight(
+        lastPerformance.baseWeight + config.incrementValue
+      );
       return {
         goalAchieved: true,
         status: "PROGRESSION_WEIGHT_INCREASE",

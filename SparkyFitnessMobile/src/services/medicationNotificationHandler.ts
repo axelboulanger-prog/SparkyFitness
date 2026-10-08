@@ -36,7 +36,7 @@ export function initMedicationNotificationActions(): void {
     const scheduleId = data?.scheduleId;
     const entryDate = data?.entryDate;
 
-    if (!medicationId || !entryDate) {
+    if ((!medicationId && !data?.doses) || !entryDate) {
       addLog(
         '[MedicationNotificationAction] Missing required data in notification',
         'WARNING'
@@ -44,10 +44,24 @@ export function initMedicationNotificationActions(): void {
       return;
     }
 
+    let doses: { medicationId: string; scheduleId: string | null }[] = [];
+    if (data?.doses) {
+      try {
+        const parsed = JSON.parse(data.doses);
+        if (Array.isArray(parsed)) {
+          doses = parsed;
+        }
+      } catch {
+        // fallback below
+      }
+    }
+    if (doses.length === 0 && medicationId) {
+      doses = [{ medicationId, scheduleId: scheduleId ?? null }];
+    }
+
     void handleNotificationAction(
       status,
-      medicationId,
-      scheduleId ?? null,
+      doses,
       entryDate,
       response.notification.request.identifier,
       data?.baseKey ?? data?.key ?? null
@@ -57,8 +71,7 @@ export function initMedicationNotificationActions(): void {
 
 async function handleNotificationAction(
   status: MedicationEntryStatus,
-  medicationId: string,
-  scheduleId: string | null,
+  doses: { medicationId: string; scheduleId: string | null }[],
   entryDate: string,
   notificationId: string,
   key: string | null
@@ -67,20 +80,31 @@ async function handleNotificationAction(
     const existing = await listEntries({
       fromDate: entryDate,
       toDate: entryDate,
-      medicationId,
+      ...(doses.length === 1 ? { medicationId: doses[0].medicationId } : {}),
     });
-    if (isDoseLogged(existing, medicationId, scheduleId)) {
+
+    const unlogged = doses.filter(
+      (d) => !isDoseLogged(existing, d.medicationId, d.scheduleId)
+    );
+
+    if (unlogged.length === 0) {
       await dismissDeliveredNotification(notificationId);
       return;
     }
 
-    await createEntry({
-      medication_id: medicationId,
-      schedule_id: scheduleId,
-      status,
-      entry_date: entryDate,
-      taken_at: status === 'taken' ? new Date().toISOString() : undefined,
-    });
+    const takenAt = status === 'taken' ? new Date().toISOString() : undefined;
+
+    await Promise.all(
+      unlogged.map((d) =>
+        createEntry({
+          medication_id: d.medicationId,
+          schedule_id: d.scheduleId,
+          status,
+          entry_date: entryDate,
+          taken_at: takenAt,
+        })
+      )
+    );
 
     // This path writes the entry through the API directly rather than through the
     // mutations, so nothing else marks the caches stale. With an infinite stale time the
@@ -105,7 +129,7 @@ async function handleNotificationAction(
 
     await dismissDeliveredNotification(notificationId);
     addLog(
-      `[MedicationNotificationAction] Logged medication ${medicationId} as ${status}`,
+      `[MedicationNotificationAction] Logged ${unlogged.length} medication(s) as ${status}`,
       'DEBUG'
     );
   } catch (error) {

@@ -147,6 +147,12 @@ const AboutDialog: React.FC<AboutDialogProps> = ({
                           'Swiss Food Composition Database API'
                         )}
                       </li>
+                      <li>
+                        {t(
+                          'aboutDialog.canadianNutrientFileApi',
+                          'Canadian Nutrient File (Health Canada)'
+                        )}
+                      </li>
                     </ul>
                   </li>
                 </ul>

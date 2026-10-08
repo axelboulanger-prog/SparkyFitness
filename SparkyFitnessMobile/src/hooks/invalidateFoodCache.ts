@@ -4,6 +4,7 @@ import {
   caffeineActiveRootQueryKey,
   dailySummaryQueryKey,
   dailySummaryRootQueryKey,
+  fastingRootQueryKey,
   foodsQueryKey,
   waterIntakeLogQueryKey,
 } from './queryKeys';
@@ -37,5 +38,9 @@ export function invalidateFoodCache(
   }
   void queryClient.invalidateQueries({
     queryKey: [...foodsQueryKey],
+  });
+  void queryClient.invalidateQueries({
+    queryKey: fastingRootQueryKey,
+    refetchType: 'all',
   });
 }

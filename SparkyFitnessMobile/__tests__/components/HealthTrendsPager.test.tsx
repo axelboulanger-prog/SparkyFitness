@@ -46,6 +46,16 @@ jest.mock('../../src/components/HydrationBarChart', () => {
   };
 });
 
+jest.mock('../../src/components/CaloriesBarChart', () => {
+  const ReactModule = require('react');
+  const { View } = require('react-native');
+  return {
+    __esModule: true,
+    default: (props: Record<string, unknown>) =>
+      ReactModule.createElement(View, { testID: 'calories-chart', ...props }),
+  };
+});
+
 type PagerProps = React.ComponentProps<typeof HealthTrendsPager>;
 
 const emptySeries = <TPoint,>(): HealthTrendSeries<TPoint> => ({
@@ -105,11 +115,20 @@ const sleepSeries = sleepTrend({
 
 const hydrationSeries = populated({ day: '2026-06-03', milliliters: 1500 });
 
+const caloriesSeries = populated({
+  day: '2026-06-03',
+  calories: 1850,
+  protein: 100,
+  carbs: 200,
+  fat: 60,
+});
+
 const baseProps = (): PagerProps => ({
   steps: stepsSeries,
   weight: emptySeries(),
   sleep: sleepTrend(),
   hydration: emptySeries(),
+  calories: emptySeries(),
   range: '7d',
   weightUnit: 'kg',
   waterUnit: 'ml',
@@ -464,6 +483,62 @@ describe('HealthTrendsPager', () => {
     expect(onPageSelected).toHaveBeenCalledWith(0);
   });
 
+  test('renders calories when the window has a logged day', () => {
+    renderPager({
+      calories: caloriesSeries,
+      visibleTrends: ['steps', 'calories'],
+    });
+
+    expect(chartOrder()).toEqual(['steps-chart', 'calories-chart']);
+  });
+
+  // `useCaloriesRange` zero-fills every day in the window, so calories' `data` is never
+  // empty and a `data.length` check would show the page to someone who has never logged
+  // food — the same trap hydration's zero-fill gating already sidesteps.
+  test('hides calories when every day in the window is a zero fill', () => {
+    renderPager({
+      calories: {
+        data: [
+          {
+            day: '2026-06-01',
+            calories: 0,
+            protein: 0,
+            carbs: 0,
+            fat: 0,
+          },
+        ],
+        isLoading: false,
+        isError: false,
+      },
+      visibleTrends: ['steps', 'calories'],
+    });
+
+    expect(chartOrder()).toEqual(['steps-chart']);
+  });
+
+  // `buildCaloriesStackDays` draws a neutral `other` segment for logged calories with no
+  // macro breakdown (see caloriesStackLayout.ts), so this page should show rather than hide.
+  test('shows calories when a day has calories but no macros', () => {
+    renderPager({
+      calories: {
+        data: [
+          {
+            day: '2026-06-01',
+            calories: 120,
+            protein: 0,
+            carbs: 0,
+            fat: 0,
+          },
+        ],
+        isLoading: false,
+        isError: false,
+      },
+      visibleTrends: ['steps', 'calories'],
+    });
+
+    expect(chartOrder()).toEqual(['steps-chart', 'calories-chart']);
+  });
+
   test('forwards the selected page position', () => {
     const onPageSelected = jest.fn();
     renderPager({ weight: weightSeries, sleep: sleepSeries, onPageSelected });
@@ -475,15 +550,15 @@ describe('HealthTrendsPager', () => {
     expect(onPageSelected).toHaveBeenCalledWith(2);
   });
 
-  test('passes hydrationGoal only to the hydration page', () => {
+  test('passes hydrationGoals only to the hydration page', () => {
     renderPager({
       weight: weightSeries,
       hydration: hydrationSeries,
       visibleTrends: ['steps', 'weight', 'hydration'],
-      hydrationGoal: 2500,
+      hydrationGoals: [2500],
     });
 
-    expect(screen.getByTestId('hydration-chart').props.goal).toBe(2500);
+    expect(screen.getByTestId('hydration-chart').props.goals).toEqual([2500]);
     expect(screen.getByTestId('weight-chart').props.goal).toBeUndefined();
   });
 
@@ -496,6 +571,20 @@ describe('HealthTrendsPager', () => {
     });
 
     expect(screen.getByTestId('weight-chart').props.goal).toBe(70);
-    expect(screen.getByTestId('hydration-chart').props.goal).toBeUndefined();
+    expect(screen.getByTestId('hydration-chart').props.goals).toBeUndefined();
+  });
+
+  test('passes calorieGoals only to the calories page', () => {
+    renderPager({
+      weight: weightSeries,
+      calories: caloriesSeries,
+      visibleTrends: ['steps', 'weight', 'calories'],
+      calorieGoals: [1800, 2000],
+    });
+
+    expect(screen.getByTestId('calories-chart').props.goals).toEqual([
+      1800, 2000,
+    ]);
+    expect(screen.getByTestId('weight-chart').props.goal).toBeUndefined();
   });
 });

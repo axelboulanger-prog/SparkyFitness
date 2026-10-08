@@ -669,6 +669,7 @@ const ExerciseDatabaseManager = () => {
         entityName={t('exercise.databaseManager.exercises', 'exercises')}
         description={t('exercise.databaseManager.bulkDeleteDescription', {
           count: selectedCount,
+          selectedCount,
           defaultValue: `Remove these ${selectedCount} exercises from your library and from any workout presets and plans. Workouts you have already logged are kept in your diary.`,
         })}
         onConfirm={handleBulkDeleteConfirm}

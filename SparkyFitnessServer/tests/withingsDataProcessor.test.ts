@@ -71,6 +71,57 @@ describe('processWithingsWorkouts duration units', () => {
       'Withings'
     );
   });
+
+  // exercise_entries has no unique constraint, and 'Withings' is not in the
+  // sync-source list that skips the manual one-per-exercise-per-day lookup.
+  // An entry with no source_id therefore matched the earlier workout of the
+  // same category and overwrote it, so the day kept only the last one.
+  it('stores every workout of the same category on one day', async () => {
+    const startdate = 1750000000;
+    await processWithingsWorkouts(UID, CID, [
+      {
+        id: 111,
+        startdate,
+        enddate: startdate + 1800,
+        category: 2,
+        data: { calories: 300 },
+      },
+      {
+        id: 222,
+        startdate: startdate + 7200,
+        enddate: startdate + 9000,
+        category: 2,
+        data: { calories: 250 },
+      },
+    ] as Parameters<typeof processWithingsWorkouts>[2]);
+
+    expect(exerciseEntryRepository.createExerciseEntry).toHaveBeenCalledTimes(
+      2
+    );
+    const sourceIds = vi
+      .mocked(exerciseEntryRepository.createExerciseEntry)
+      .mock.calls.map(([, entryData]) => entryData.source_id);
+    expect(sourceIds).toEqual(['111', '222']);
+  });
+
+  it('falls back to the start time when a workout carries no id', async () => {
+    const startdate = 1750000000;
+    await processWithingsWorkouts(UID, CID, [
+      {
+        startdate,
+        enddate: startdate + 1800,
+        category: 2,
+        data: { calories: 300 },
+      },
+    ] as Parameters<typeof processWithingsWorkouts>[2]);
+
+    expect(exerciseEntryRepository.createExerciseEntry).toHaveBeenCalledWith(
+      UID,
+      expect.objectContaining({ source_id: `withings-workout-${startdate}` }),
+      CID,
+      'Withings'
+    );
+  });
 });
 
 describe('processWithingsMeasures malformed payloads', () => {

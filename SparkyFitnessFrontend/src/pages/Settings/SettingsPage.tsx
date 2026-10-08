@@ -38,6 +38,7 @@ import { DeveloperResources } from './DevloperResources';
 import { AccountSecurity } from './AccountSecurity';
 import { ApiSettings } from './ApiSettings';
 import { WaterTrackingSettings } from './WaterTrackingSettings';
+import { FastingSettings } from './FastingSettings';
 import { GuidedWorkoutSettings } from './GuidedWorkoutSettings';
 import CycleSettings from './CycleSettings';
 import { PreferenceSettings } from './PreferenceSettings';
@@ -63,6 +64,7 @@ const SECTION_TO_TAB_MAP: Record<string, string> = {
   'custom-meals': 'nutrition-diet',
   'calculation-settings': 'nutrition-diet',
   'water-tracking': 'nutrition-diet',
+  'fasting-settings': 'nutrition-diet',
   'cycle-settings': 'wellness',
   'guided-workouts': 'wellness',
   'custom-categories': 'wellness',
@@ -343,6 +345,12 @@ const Settings = () => {
               className="border rounded-lg mb-4"
             >
               <WaterTrackingSettings />
+            </AccordionItem>
+            <AccordionItem
+              value="fasting-settings"
+              className="border rounded-lg mb-4"
+            >
+              <FastingSettings />
             </AccordionItem>
           </Accordion>
         </TabsContent>

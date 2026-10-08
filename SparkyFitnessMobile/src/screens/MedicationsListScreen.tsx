@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   View,
@@ -14,10 +14,16 @@ import { useMedications } from '../hooks/useMedications';
 import { useNativeIOSHeadersActive } from '../services/nativeTabBarPreference';
 import { useScreenHeader } from '../hooks/useScreenHeader';
 import Icon from '../components/Icon';
+import ActionSheet, {
+  type ActionSheetItem,
+  type ActionSheetRef,
+} from '../components/ActionSheet';
 import MedicalDisclaimer from '../components/MedicalDisclaimer';
+import SegmentedControl, { type Segment } from '../components/SegmentedControl';
 import MedicationRow from '../components/medications/MedicationRow';
 import type { RootStackScreenProps } from '../types/navigation';
 import type { Medication } from '@workspace/shared';
+import { filterMedsBySubtype, type MedSubtype } from '../utils/supplements';
 
 type MedicationsListScreenProps = RootStackScreenProps<'MedicationsList'>;
 
@@ -34,16 +40,27 @@ const MedicationsListScreen: React.FC<MedicationsListScreenProps> = ({
   ]) as [string, string];
   const [refreshing, setRefreshing] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
+  const [subtype, setSubtype] = useState<MedSubtype>('all');
+  const addSheetRef = useRef<ActionSheetRef>(null);
 
   const { data: medications, isLoading, isError, refetch } = useMedications();
 
+  const hasSupplements = useMemo(
+    () => (medications ?? []).some((m) => m.is_supplement),
+    [medications]
+  );
+
+  // The filter only shows while a supplement exists, so without one the list
+  // is unfiltered rather than stuck on a view with no control to leave it.
+  const activeSubtype: MedSubtype = hasSupplements ? subtype : 'all';
+
   const { active, inactive } = useMemo(() => {
-    const meds = medications ?? [];
+    const meds = filterMedsBySubtype(medications ?? [], activeSubtype);
     return {
       active: meds.filter((m) => m.is_active),
       inactive: meds.filter((m) => !m.is_active),
     };
-  }, [medications]);
+  }, [medications, activeSubtype]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -59,13 +76,54 @@ const MedicationsListScreen: React.FC<MedicationsListScreenProps> = ({
       sfSymbol: 'plus',
       ionicon: 'add-outline',
       role: 'primary',
-      onPress: () => navigation.navigate('MedicationForm', {}),
+      onPress: () => addSheetRef.current?.present(),
       accessibilityLabel: t('medications.addMedication', {
         defaultValue: 'Add medication',
       }),
       identifier: 'medications-list-add',
     },
   });
+
+  const addItems = useMemo<ActionSheetItem[]>(
+    () => [
+      {
+        key: 'medication',
+        label: t('medications.addMedicationTitle', {
+          defaultValue: 'Add Medication',
+        }),
+        onPress: () => navigation.navigate('MedicationForm', {}),
+      },
+      {
+        key: 'supplement',
+        label: t('medications.supplement.add', {
+          defaultValue: 'Add Supplement',
+        }),
+        onPress: () =>
+          navigation.navigate('MedicationForm', { isSupplement: true }),
+      },
+    ],
+    [navigation, t]
+  );
+
+  const subtypeSegments = useMemo<Segment<MedSubtype>[]>(
+    () => [
+      {
+        key: 'all',
+        label: t('medications.filter.all', { defaultValue: 'All' }),
+      },
+      {
+        key: 'meds',
+        label: t('medications.filter.meds', { defaultValue: 'Meds' }),
+      },
+      {
+        key: 'supplements',
+        label: t('medications.filter.supplements', {
+          defaultValue: 'Supplements',
+        }),
+      },
+    ],
+    [t]
+  );
 
   const renderMedItem = ({ item }: { item: Medication }) => (
     <MedicationRow
@@ -112,7 +170,7 @@ const MedicationsListScreen: React.FC<MedicationsListScreenProps> = ({
             </Text>
           </TouchableOpacity>
         </View>
-      ) : active.length === 0 && inactive.length === 0 ? (
+      ) : (medications?.length ?? 0) === 0 ? (
         <View className="flex-1 items-center justify-center p-8">
           <Icon name="medication" size={48} color={iconDecorative} />
           <Text className="text-text-muted text-lg mt-4 text-center">
@@ -132,6 +190,18 @@ const MedicationsListScreen: React.FC<MedicationsListScreenProps> = ({
             <Text className="text-white font-semibold">
               {t('medications.addMedicationTitle', {
                 defaultValue: 'Add Medication',
+              })}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            className="mt-3 px-6 py-3"
+            onPress={() =>
+              navigation.navigate('MedicationForm', { isSupplement: true })
+            }
+          >
+            <Text className="text-accent-primary font-semibold">
+              {t('medications.supplement.add', {
+                defaultValue: 'Add Supplement',
               })}
             </Text>
           </TouchableOpacity>
@@ -169,6 +239,30 @@ const MedicationsListScreen: React.FC<MedicationsListScreenProps> = ({
               </TouchableOpacity>
             ) : null
           }
+          ListHeaderComponent={
+            <View>
+              {hasSupplements && (
+                <View className="px-4 pb-2">
+                  <SegmentedControl
+                    segments={subtypeSegments}
+                    activeKey={activeSubtype}
+                    onSelect={setSubtype}
+                  />
+                </View>
+              )}
+              {active.length === 0 && inactive.length === 0 && (
+                <Text className="text-text-muted text-base text-center px-8 py-8">
+                  {activeSubtype === 'supplements'
+                    ? t('medications.supplement.none', {
+                        defaultValue: 'No supplements yet',
+                      })
+                    : t('medications.noMedications', {
+                        defaultValue: 'No medications yet',
+                      })}
+                </Text>
+              )}
+            </View>
+          }
           ListFooterComponent={
             <View className="px-4 pt-6">
               <MedicalDisclaimer />
@@ -190,6 +284,13 @@ const MedicationsListScreen: React.FC<MedicationsListScreenProps> = ({
           }
         />
       )}
+      <ActionSheet
+        ref={addSheetRef}
+        title={t('medications.addMedication', {
+          defaultValue: 'Add medication',
+        })}
+        items={addItems}
+      />
     </View>
   );
 };

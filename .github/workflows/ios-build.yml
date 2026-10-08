@@ -15,6 +15,15 @@ name: Build iOS & watchOS
 
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: >-
+          Runner label: xcode-27 (preview image) to compile code guarded by
+          compiler(>=6.4), such as modules/on-device-nutrition. Anything else
+          runs on macos-latest, so a dispatch cannot pick another runner.
+        required: false
+        default: macos-latest
+        type: string
 
 # A second push to the same branch makes the first build irrelevant.
 concurrency:
@@ -24,7 +33,7 @@ concurrency:
 jobs:
   build:
     name: Compile iOS app and watchOS companion
-    runs-on: macos-latest
+    runs-on: ${{ inputs.runner == 'xcode-27' && 'xcode-27' || 'macos-latest' }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -64,6 +73,24 @@ jobs:
       - name: List generated schemes
         working-directory: SparkyFitnessMobile
         run: xcodebuild -list -workspace ios/SparkyFitness.xcworkspace
+
+      # The simulator SDK may omit device-only FoundationModels/Vision types, so
+      # compile the on-device nutrition module for a real device too. Compile
+      # only (no signing). Fast: builds just that pod and its dependencies.
+      - name: Compile on-device nutrition module for device
+        if: ${{ inputs.runner == 'xcode-27' }}
+        working-directory: SparkyFitnessMobile
+        run: |
+          xcodebuild \
+            -workspace ios/SparkyFitness.xcworkspace \
+            -scheme 'OnDeviceNutritionModule' \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build-device \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
 
       # Scheme name comes from `name` in targets/watch/expo-target.config.js.
       # Note it is NOT "SparkyFitness Watch" — there is a sibling
@@ -111,24 +138,29 @@ jobs:
           BUNDLE_ID="org.SparkyApps.SparkyFitnessMobile1.dev.watchkitapp"
           mkdir -p screenshots
 
-          UDID=$(xcrun simctl list devices available -j | python3 -c "
-          import json, sys
-          devices = json.load(sys.stdin)['devices']
-          for runtime, entries in devices.items():
-              if 'watchOS' in runtime and entries:
-                  print(entries[0]['udid'])
-                  break
+          # The smallest and the largest watch on the image, so a layout that
+          # only fits one case shows up. A 40 mm screen is the tight one.
+          DEVICES=$(xcrun simctl list devices available -j | python3 -c "
+          import json, re, sys
+          found = []
+          for runtime, entries in json.load(sys.stdin)['devices'].items():
+              if 'watchOS' not in runtime:
+                  continue
+              for entry in entries:
+                  match = re.search(r'(\\d+)mm', entry['name'])
+                  if match:
+                      found.append((int(match.group(1)), entry['udid']))
+          found.sort()
+          if found:
+              print(found[0][0], found[0][1])
+              if found[-1][0] != found[0][0]:
+                  print(found[-1][0], found[-1][1])
           ")
-          if [ -z "${UDID:-}" ]; then
+          if [ -z "${DEVICES:-}" ]; then
             echo 'No watchOS simulator available on this image:'
             xcrun simctl list devices available
             exit 1
           fi
-          echo "Using watch simulator $UDID"
-
-          xcrun simctl boot "$UDID" || true
-          xcrun simctl bootstatus "$UDID" -b
-          xcrun simctl install "$UDID" "$APP"
 
           # $1 = output name, $2 = SPARKY_SCREENSHOT_WORKOUT, $3 = page,
           # $4 = optional SPARKY_SCREENSHOT_SHEET
@@ -142,14 +174,24 @@ jobs:
             # SwiftUI needs a moment to settle, and the rest countdown needs
             # to actually be counting before it is worth photographing.
             sleep 8
-            xcrun simctl io "$UDID" screenshot "screenshots/$1.png"
+            xcrun simctl io "$UDID" screenshot "screenshots/$1-$SIZE.png"
           }
 
-          shoot workout-active active workout
-          shoot workout-resting resting workout
-          shoot workout-idle none workout
-          shoot workout-exercises active workout exercises
-          shoot goals none goals
+          while read -r SIZE UDID; do
+            echo "Using ${SIZE}mm watch simulator $UDID"
+            xcrun simctl boot "$UDID" || true
+            xcrun simctl bootstatus "$UDID" -b
+            xcrun simctl install "$UDID" "$APP"
+
+            shoot workout-active active workout
+            shoot workout-resting resting workout
+            shoot workout-idle none workout
+            shoot workout-exercises active workout exercises
+            shoot workout-timed timed workout
+            shoot workout-stopwatch stopwatch workout
+            shoot workout-interval interval workout
+            shoot goals none goals
+          done <<< "$DEVICES"
 
           ls -la screenshots
 

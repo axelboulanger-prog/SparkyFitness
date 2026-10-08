@@ -1,7 +1,9 @@
 import SwiftUI
+import WatchKit
 
 @main
 struct SparkyFitnessWatchApp: App {
+    @WKApplicationDelegateAdaptor private var appDelegate: WatchAppDelegate
     // All @MainActor singletons: the session must be activated as early as
     // possible so queued check-ins from a previous launch start delivering
     // before the wearer taps anything.

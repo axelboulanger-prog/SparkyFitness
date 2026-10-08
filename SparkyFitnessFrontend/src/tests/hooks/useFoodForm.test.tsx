@@ -1466,4 +1466,319 @@ describe('useCustomFoodForm', () => {
       })
     );
   });
+
+  // Regression: "Refresh data from source" only overwrote the fields the data
+  // source actually returned, leaving stale values for everything else (e.g.
+  // an OpenFoodFacts cereal product that reports no sodium or vitamins). The
+  // source stores 0 for nutrients it doesn't provide, which the form maps to
+  // undefined (blank) — so a refresh must clear those fields just like a
+  // fresh import would, instead of keeping whatever was there before.
+  it('clears stale values for fields the data source does not provide on refresh', async () => {
+    const staleVariant = createVariant({
+      id: 'variant-1',
+      serving_size: 100,
+      serving_unit: 'g',
+      is_default: true,
+      source: 'imported',
+      // Fields the source WILL provide again on refresh (stale values to update).
+      calories: 340,
+      carbs: 65,
+      fat: 2,
+      dietary_fiber: 2.5,
+      protein: 6,
+      saturated_fat: 0.5,
+      sugars: 20,
+      // Stale values the source does NOT provide — these must be cleared.
+      sodium: 120,
+      potassium: 300,
+      cholesterol: 10,
+      trans_fat: 0.3,
+      polyunsaturated_fat: 0.9,
+      monounsaturated_fat: 1.4,
+      vitamin_a: 100,
+      vitamin_c: 8,
+      calcium: 45,
+      iron: 1.2,
+      caffeine_mg: 5,
+      water_ml: 200,
+      alcohol_g: 0.6,
+      abv_percent: 0.5,
+      glycemic_index: 'High',
+    });
+
+    // Stable reference: the hook's seeding effect depends on initialVariants,
+    // so a fresh array per render would reseed forever.
+    const initialVariants = [staleVariant];
+
+    const { result } = renderHook(() =>
+      useCustomFoodForm({
+        initialVariants,
+        onSave: jest.fn(),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.variants[0]?.is_default).toBe(true);
+    });
+
+    // Mirrors the OpenFoodFacts mapper: only energy, carbs, fat, fiber,
+    // protein, saturated fat and sugars are present; every other nutrient is 0
+    // (the server's "not provided" marker) and there is no glycemic index.
+    const refreshedVariant: FoodVariant = {
+      id: 'variant-1',
+      serving_size: 100,
+      serving_unit: 'g',
+      is_default: true,
+      calories: 367,
+      carbs: 71,
+      fat: 1.4,
+      dietary_fiber: 3.2,
+      protein: 7.1,
+      saturated_fat: 0.2,
+      sugars: 25.5,
+      sodium: 0,
+      potassium: 0,
+      cholesterol: 0,
+      trans_fat: 0,
+      polyunsaturated_fat: 0,
+      monounsaturated_fat: 0,
+      vitamin_a: 0,
+      vitamin_c: 0,
+      calcium: 0,
+      iron: 0,
+      caffeine_mg: 0,
+      water_ml: 0,
+      alcohol_g: 0,
+      abv_percent: 0,
+    };
+
+    const refreshedFood = createFood({
+      name: 'Wheetabix',
+      brand: 'Nestlé',
+      variants: undefined,
+      default_variant: refreshedVariant,
+    });
+
+    act(() => {
+      result.current.applyProviderRefresh(refreshedFood);
+    });
+
+    const refreshed = result.current.variants[0];
+
+    // Fields the source provides are updated to the fresh values.
+    expect(refreshed?.calories).toBe(367);
+    expect(refreshed?.carbs).toBe(71);
+    expect(refreshed?.fat).toBe(1.4);
+    expect(refreshed?.dietary_fiber).toBe(3.2);
+    expect(refreshed?.protein).toBe(7.1);
+    expect(refreshed?.saturated_fat).toBe(0.2);
+    expect(refreshed?.sugars).toBe(25.5);
+
+    // Fields the source does not provide are cleared (0 -> blank), matching a
+    // fresh import instead of retaining the stale values.
+    expect(refreshed?.sodium).toBeUndefined();
+    expect(refreshed?.potassium).toBeUndefined();
+    expect(refreshed?.cholesterol).toBeUndefined();
+    expect(refreshed?.trans_fat).toBeUndefined();
+    expect(refreshed?.polyunsaturated_fat).toBeUndefined();
+    expect(refreshed?.monounsaturated_fat).toBeUndefined();
+    expect(refreshed?.vitamin_a).toBeUndefined();
+    expect(refreshed?.vitamin_c).toBeUndefined();
+    expect(refreshed?.calcium).toBeUndefined();
+    expect(refreshed?.iron).toBeUndefined();
+    expect(refreshed?.caffeine_mg).toBeUndefined();
+    expect(refreshed?.water_ml).toBeUndefined();
+    expect(refreshed?.alcohol_g).toBeUndefined();
+    expect(refreshed?.abv_percent).toBeUndefined();
+
+    // Glycemic index mirrors a fresh import: the source doesn't provide it, so
+    // it resets to 'None' rather than keeping the stale 'High'.
+    expect(refreshed?.glycemic_index).toBe('None');
+  });
+
+  it('rescales non-default variants from the refreshed default on provider refresh', async () => {
+    mockAutoScaleOnlineImports = true;
+
+    // Distinct nutrient values keep the three variants from merging during
+    // seeding (equivalent variants collapse into a single row).
+    const defaultVariant = createVariant({
+      id: 'variant-1',
+      is_default: true,
+      is_locked: true,
+      serving_size: 100,
+      serving_unit: 'g',
+      calories: 340,
+      protein: 13,
+      carbs: 65,
+      fat: 2.5,
+    });
+    const halfPortion = createVariant({
+      id: 'variant-2',
+      is_default: false,
+      is_locked: true,
+      serving_size: 50,
+      serving_unit: 'g',
+      calories: 170,
+      protein: 6.5,
+      carbs: 32.5,
+      fat: 1.25,
+    });
+    const tablespoons = createVariant({
+      id: 'variant-3',
+      is_default: false,
+      is_locked: true,
+      serving_size: 2,
+      serving_unit: 'tbsp',
+      calories: 85,
+      protein: 3.25,
+      carbs: 16.25,
+      fat: 0.75,
+    });
+
+    // Stable reference: the hook's seeding effect depends on initialVariants,
+    // so a fresh array per render would reseed forever.
+    const initialVariants = [defaultVariant, halfPortion, tablespoons];
+
+    const { result } = renderHook(() =>
+      useCustomFoodForm({
+        initialVariants,
+        onSave: jest.fn(),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.variants.length).toBe(3);
+      expect(result.current.variants[1]?.is_locked).toBe(true);
+    });
+
+    // The source now reports higher values for the default serving.
+    const refreshedDefault: FoodVariant = {
+      id: 'variant-1',
+      serving_size: 100,
+      serving_unit: 'g',
+      is_default: true,
+      calories: 390,
+      protein: 25,
+      carbs: 78,
+      fat: 3,
+    };
+
+    const refreshedFood = createFood({
+      name: 'Refreshed Food',
+      brand: 'Acme',
+      variants: undefined,
+      default_variant: refreshedDefault,
+    });
+
+    act(() => {
+      result.current.applyProviderRefresh(refreshedFood);
+    });
+
+    const refreshed = result.current.variants;
+
+    // The default variant takes the fresh values.
+    expect(refreshed[0]?.calories).toBe(390);
+    expect(refreshed[0]?.protein).toBe(25);
+
+    // The 50 g variant is rescaled from the REFRESHED default
+    // (50 / 100 = 0.5), not from its own stale values: 390 * 0.5 = 195, not
+    // 170. Its identity, serving data, and lock state survive the rescale.
+    expect(refreshed[1]?.id).toBe('variant-2');
+    expect(refreshed[1]?.is_default).toBe(false);
+    expect(refreshed[1]?.is_locked).toBe(true);
+    expect(refreshed[1]?.serving_size).toBe(50);
+    expect(refreshed[1]?.serving_unit).toBe('g');
+    expect(refreshed[1]?.calories).toBe(195);
+    expect(refreshed[1]?.protein).toBe(12.5);
+    expect(refreshed[1]?.carbs).toBe(39);
+    expect(refreshed[1]?.fat).toBe(1.5);
+
+    // g -> tbsp is not a supported conversion, so the tablespoon variant is
+    // left untouched.
+    expect(refreshed[2]?.id).toBe('variant-3');
+    expect(refreshed[2]?.serving_unit).toBe('tbsp');
+    expect(refreshed[2]?.serving_size).toBe(2);
+    expect(refreshed[2]?.calories).toBe(85);
+    expect(refreshed[2]?.protein).toBe(3.25);
+  });
+
+  it('scales a locked variant from the refreshed default after a provider refresh', async () => {
+    mockAutoScaleOnlineImports = true;
+
+    // Distinct nutrient values keep the two variants separate rows.
+    const defaultVariant = createVariant({
+      id: 'variant-1',
+      is_default: true,
+      is_locked: true,
+      serving_size: 100,
+      serving_unit: 'g',
+      calories: 340,
+      protein: 13,
+      carbs: 65,
+      fat: 2.5,
+    });
+    const halfPortion = createVariant({
+      id: 'variant-2',
+      is_default: false,
+      is_locked: true,
+      serving_size: 50,
+      serving_unit: 'g',
+      calories: 170,
+      protein: 6.5,
+      carbs: 32.5,
+      fat: 1.25,
+    });
+
+    // Stable reference: the hook's seeding effect depends on initialVariants,
+    // so a fresh array per render would reseed forever.
+    const initialVariants = [defaultVariant, halfPortion];
+
+    const { result } = renderHook(() =>
+      useCustomFoodForm({
+        initialVariants,
+        onSave: jest.fn(),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.variants.length).toBe(2);
+      expect(result.current.variants[1]?.is_locked).toBe(true);
+    });
+
+    const refreshedDefault: FoodVariant = {
+      id: 'variant-1',
+      serving_size: 100,
+      serving_unit: 'g',
+      is_default: true,
+      calories: 390,
+      protein: 25,
+      carbs: 78,
+      fat: 3,
+    };
+
+    const refreshedFood = createFood({
+      name: 'Refreshed Food',
+      brand: 'Acme',
+      variants: undefined,
+      default_variant: refreshedDefault,
+    });
+
+    act(() => {
+      result.current.applyProviderRefresh(refreshedFood);
+    });
+
+    // Edit the locked 50 g variant's serving size. It must scale from the
+    // refreshed scaling base (195 * 80/50 = 312), not the stale one
+    // (170 * 80/50 = 272).
+    act(() => {
+      result.current.updateVariant(1, 'serving_size', 80);
+    });
+
+    const updated = result.current.variants[1];
+    expect(updated?.serving_size).toBe(80);
+    expect(updated?.calories).toBe(312);
+    expect(updated?.protein).toBe(20);
+    expect(updated?.carbs).toBe(62.4);
+    expect(updated?.fat).toBe(2.4);
+  });
 });

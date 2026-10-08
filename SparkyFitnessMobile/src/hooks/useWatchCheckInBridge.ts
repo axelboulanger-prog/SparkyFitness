@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AppState } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import WatchConnectivity, {
   type WatchCheckInPayload,
   type WatchContextPayload,
@@ -32,8 +33,40 @@ import { formatTimeLabel } from '../utils/entryTimeDisplay';
 import { addLog } from '../services/LogService';
 import { queryClient } from './queryClient';
 import { usePreferences } from './usePreferences';
+import { useAppPreferencesStore } from '../stores/appPreferencesStore';
 import { useDailySummary } from './useDailySummary';
+import { WATCH_PAGE_KEYS } from '../constants/watchPages';
+import { resolveKeyOrder } from '../utils/reorderUtils';
+import { buildWatchGoalNutrients, shownInOrder } from '../utils/watchNutrients';
+import { useCustomNutrients } from './useCustomNutrients';
+import { useTranslation } from 'react-i18next';
 import type { CheckInMeasurement } from '../types/measurements';
+import type { WorkoutPreset } from '../types/workoutPresets';
+import { useWorkoutPresets } from './useWorkoutPresets';
+import { getActiveServerConfigId } from '../services/storage';
+import { useActiveWorkoutPlans } from './useActiveWorkoutPlan';
+import { scheduledWorkoutsForWatch } from '../utils/workoutPlanSchedule';
+
+/** Saved workouts the watch may start. Presets with no exercises are omitted:
+ * the server rejects a session that has none. */
+/** The distance unit the watch shows weighted carries in: miles → yards, else metres. */
+export function watchDistanceUnit(
+  preference: string | null | undefined
+): 'km' | 'miles' {
+  return preference === 'miles' ? 'miles' : 'km';
+}
+
+export function startableWorkoutsForWatch(
+  presets: readonly Pick<WorkoutPreset, 'id' | 'name' | 'exercises'>[]
+): { presetId: string; name: string }[] {
+  return presets
+    .filter(
+      (preset) => preset.name.trim() !== '' && preset.exercises.length > 0
+    )
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((preset) => ({ presetId: String(preset.id), name: preset.name }));
+}
 
 /** Clamps a goal-progress fraction to 0...1 — passing a goal always reads as 1. */
 function goalProgress(consumed: number, goal: number): number {
@@ -73,6 +106,7 @@ const NO_FIGURES_FOR_TODAY = {
   fatGoal: null,
   waterConsumedMl: null,
   waterLog: [] as WatchWaterLogPayload[],
+  goalNutrients: null,
 } as const;
 
 /**
@@ -90,6 +124,35 @@ function localHourMinute(timestamp: string): string | null {
   const minutes = String(date.getMinutes()).padStart(2, '0');
   return `${hours}:${minutes}`;
 }
+
+/**
+ * Where the watch ack bookkeeping survives a restart of the JS layer.
+ *
+ * Without it, `handledWaterClientIdsRef` and `ackedClientIdsRef` came back empty
+ * on every reload, and since `clientId` is never sent to the server there is no
+ * idempotency at the write boundary to fall back on. Only settled ids are kept
+ * here; see `persistAckState` for why an in-flight reservation must not be. A tap that was written but
+ * whose ack never reached the watch would then be re-sent by
+ * `resendQueuedWaterTaps`, written a second time, and — the acked list being
+ * empty too — never settle, so it re-sent again on every reconnect. Each round
+ * added another serving to the day.
+ */
+const ACK_STATE_STORAGE_KEY = 'sparky.watch.ackState.v1';
+
+/**
+ * Cap on the stored dedupe set. The in-memory set is unbounded within a session,
+ * which is harmless; on disk it would grow forever. Insertion order is preserved
+ * by `Set`, so this keeps the most recent ids — far more than a day of taps.
+ */
+const STORED_HANDLED_ID_LIMIT = 200;
+
+/** Ids the watch may still ask about after a restart. */
+type StoredAckState = {
+  handledClientIds?: string[];
+  handledWaterClientIds?: string[];
+  ackedClientIds?: string[];
+  failedClientIds?: string[];
+};
 
 /**
  * Bridges Apple Watch check-ins to the SparkyFitness server.
@@ -122,16 +185,56 @@ export function useWatchCheckInBridge(enabled: boolean): void {
   // never reachable — the immediate `sendAck` below can't manage that, and the
   // watch would otherwise show the tap as queued indefinitely.
   const failedClientIdsRef = useRef<string[]>([]);
+  // Resolves once the persisted ack state has been merged in. Every write
+  // handler awaits it before consulting its dedupe set: a queued transfer can be
+  // delivered the instant the JS layer boots, and a dedupe set that hasn't
+  // loaded yet is no dedupe at all — which is the failure this exists to close.
+  const ackStateHydrationRef = useRef<Promise<void> | null>(null);
 
   // Shared, already-cached query (30 min stale time) — reading it here adds no
   // extra fetch. 'st_lbs' collapses to 'lbs' for the watch: its crown dial only
   // has room for one number, not a stone+lb split.
   const { preferences } = usePreferences();
+  // Device-local settings the watch's haptics follow.
+  const hapticsEnabled = useAppPreferencesStore((s) => s.hapticsEnabled);
+  const watchDoubleTapEnabled = useAppPreferencesStore(
+    (s) => s.watchDoubleTapEnabled
+  );
+  const restAlertsEnabled = useAppPreferencesStore(
+    (s) => s.notificationsEnabled && s.restTimerNotificationsEnabled
+  );
+  // Settings → Apple Watch: which pages the watch shows, in what order.
+  // Device-local, so it rides the context rather than the server.
+  const watchPageOrder = useAppPreferencesStore((s) => s.watchPageOrder);
+  const hiddenWatchPages = useAppPreferencesStore((s) => s.hiddenWatchPages);
+  // And which nutrients its Goals page lists, in order.
+  const watchNutrientOrder = useAppPreferencesStore(
+    (s) => s.watchNutrientOrder
+  );
+  const shownWatchNutrients = useAppPreferencesStore(
+    (s) => s.shownWatchNutrients
+  );
+  // And how its workout page takes weight and reps.
+  const watchSetInputStyle = useAppPreferencesStore(
+    (s) => s.watchSetInputStyle
+  );
+  const { t } = useTranslation();
+  // Units for the custom nutrients the Goals page may list. Rides the same
+  // cached query the nutrition screens use.
+  const { customNutrients } = useCustomNutrients({ enabled });
   const weightUnit: 'kg' | 'lbs' =
     preferences?.default_weight_unit === 'lbs' ||
     preferences?.default_weight_unit === 'st_lbs'
       ? 'lbs'
       : 'kg';
+  // A weighted carry's distance follows the phone's distance unit: the watch
+  // shows metres, or yards when the phone is set to miles.
+  const distanceUnit = watchDistanceUnit(preferences?.default_distance_unit);
+  const { presets } = useWorkoutPresets({ enabled });
+  const startableWorkouts = useMemo(
+    () => startableWorkoutsForWatch(presets),
+    [presets]
+  );
 
   // The calendar day everything below describes.
   //
@@ -166,6 +269,31 @@ export function useWatchCheckInBridge(enabled: boolean): void {
     date: summaryDate,
     enabled,
   });
+
+  // What the diary's plan banner offers today, so the watch's workout page can
+  // put it first. Same query and completion rule as that banner.
+  const { plans: activePlans } = useActiveWorkoutPlans(summaryDate, {
+    enabled,
+  });
+  const dayExerciseEntries = dailySummary?.exerciseEntries;
+  const scheduledWorkouts = useMemo(
+    () =>
+      dayExerciseEntries === undefined
+        ? []
+        : scheduledWorkoutsForWatch(activePlans, dayExerciseEntries, {
+            scheduledToday: t(
+              'exerciseSummary.scheduledToday',
+              'Scheduled Today'
+            ),
+            sessionOf: (current, total) =>
+              t(
+                'exerciseSummary.sessionNumber',
+                'Session {{current}} of {{total}}',
+                { current, total }
+              ),
+          }),
+    [activePlans, dayExerciseEntries, t]
+  );
 
   // EVERY calorie figure sent to the watch comes from this one object — the
   // same one the phone's own summary bar (DiaryCalorieMacroSummary) and the
@@ -303,6 +431,27 @@ export function useWatchCheckInBridge(enabled: boolean): void {
   // Bundled so the day check below is one decision rather than sixteen. The
   // memo also keeps `pushContext`'s identity stable across renders that changed
   // nothing it reads.
+  // The Goals page's rows, from the same summary the macro figures above read.
+  // Memoized so an identical refetch doesn't give `pushContext` a new identity.
+  const goalNutrients = useMemo(() => {
+    if (!dailySummary) return null;
+    const customUnits = new Map(
+      customNutrients.map((def) => [def.name, def.unit || 'g'])
+    );
+    return buildWatchGoalNutrients(
+      dailySummary,
+      shownInOrder(watchNutrientOrder, shownWatchNutrients),
+      customUnits,
+      t
+    );
+  }, [
+    dailySummary,
+    customNutrients,
+    watchNutrientOrder,
+    shownWatchNutrients,
+    t,
+  ]);
+
   const figuresForSummaryDate = useMemo(
     () => ({
       calorieGoalProgress,
@@ -320,6 +469,7 @@ export function useWatchCheckInBridge(enabled: boolean): void {
       fatGoal,
       waterConsumedMl,
       waterLog: watchWaterLog,
+      goalNutrients,
     }),
     [
       calorieGoalProgress,
@@ -337,6 +487,7 @@ export function useWatchCheckInBridge(enabled: boolean): void {
       fatGoal,
       waterConsumedMl,
       watchWaterLog,
+      goalNutrients,
     ]
   );
 
@@ -355,6 +506,7 @@ export function useWatchCheckInBridge(enabled: boolean): void {
     // ordering that sticks.
     const generation = ++pushGenerationRef.current;
     try {
+      const workoutServerId = await getActiveServerConfigId();
       const today = getTodayDate();
       const startDate = addDays(today, -(HISTORY_DAYS - 1));
       const range = await fetchMeasurementsRange(startDate, today);
@@ -423,18 +575,31 @@ export function useWatchCheckInBridge(enabled: boolean): void {
         ackedClientIds: ackedClientIdsRef.current.slice(-20),
         failedClientIds: failedClientIdsRef.current.slice(-20),
         weightUnit,
+        distanceUnit,
         containers: watchContainers,
         // Goal and display unit ride outside the day gate: the watch treats
         // both as account configuration and carries them forward, which is
         // what lets a phone-free morning still draw a tap against a scale.
         waterGoalMl,
         waterDisplayUnit,
+        hapticsEnabled,
+        restAlertsEnabled,
+        doubleTapEnabled: watchDoubleTapEnabled,
+        startableWorkouts,
+        // Built for `summaryDate`; a push that has crossed midnight before the
+        // hook re-rendered must not carry yesterday's plan.
+        scheduledWorkouts: today === summaryDate ? scheduledWorkouts : [],
+        workoutServerId,
+        pageOrder: resolveKeyOrder(watchPageOrder, WATCH_PAGE_KEYS),
+        hiddenPages: hiddenWatchPages,
+        setInputStyle: watchSetInputStyle,
         ...figures,
       };
 
       // Superseded while the fetch above was in flight — a newer push has
       // already sent, or is about to, from fresher state than this one holds.
       if (generation !== pushGenerationRef.current) return;
+      if ((await getActiveServerConfigId()) !== workoutServerId) return;
 
       await WatchConnectivity.updateContext(context);
     } catch (error) {
@@ -449,8 +614,17 @@ export function useWatchCheckInBridge(enabled: boolean): void {
     // aggregates are memoized, so an identical refetch doesn't cause a push.
   }, [
     weightUnit,
+    distanceUnit,
+    hapticsEnabled,
+    restAlertsEnabled,
+    watchDoubleTapEnabled,
+    startableWorkouts,
+    scheduledWorkouts,
     waterGoalMl,
     waterDisplayUnit,
+    watchPageOrder,
+    hiddenWatchPages,
+    watchSetInputStyle,
     summaryDate,
     figuresForSummaryDate,
     watchContainers,
@@ -469,9 +643,98 @@ export function useWatchCheckInBridge(enabled: boolean): void {
     pushContextRef.current = pushContext;
   });
 
+  /**
+   * Writes the ack bookkeeping to disk, and is awaited by every caller.
+   *
+   * Only outcomes we actually know are stored. `handledWaterClientIdsRef` also
+   * holds reservations for writes still in flight, and those are filtered out
+   * here rather than merely not being persisted at their own call site — a
+   * concurrent tap completing would otherwise snapshot someone else's
+   * reservation onto disk. A reservation outlives the attempt that made it, so
+   * restoring one would leave an id reserved, in neither the acked nor the
+   * failed list, with nothing alive to resolve it: every resend suppressed and
+   * the tap `.queued` until midnight.
+   *
+   * Awaited rather than fired and forgotten because ordering still matters for
+   * what does get stored: an ack the watch has been told about but that isn't
+   * on disk is an ack that vanishes if the app restarts before the watch
+   * applies it.
+   *
+   * A failure is logged and swallowed rather than thrown. The in-memory sets are
+   * already updated, so dedupe still holds for this session; only the
+   * across-restart guarantee is lost. Refusing to log the wearer's water because
+   * AsyncStorage hiccuped would trade a rare duplicate for a certain lost drink,
+   * which is the worse of the two.
+   */
+  const persistAckState = useCallback(async (): Promise<void> => {
+    const acked = new Set(ackedClientIdsRef.current);
+    const stored: StoredAckState = {
+      // Check-in ids are only ever added after a successful upsert, so unlike
+      // the water set they hold no reservations. Restoring them stops a resent
+      // check-in from re-running the upsert after a restart and overwriting a
+      // newer weight the wearer has since entered on the phone.
+      handledClientIds: [...handledClientIdsRef.current]
+        .filter((id) => acked.has(id))
+        .slice(-STORED_HANDLED_ID_LIMIT),
+      handledWaterClientIds: [...handledWaterClientIdsRef.current]
+        .filter((id) => acked.has(id))
+        .slice(-STORED_HANDLED_ID_LIMIT),
+      ackedClientIds: ackedClientIdsRef.current,
+      failedClientIds: failedClientIdsRef.current,
+    };
+    try {
+      await AsyncStorage.setItem(ACK_STATE_STORAGE_KEY, JSON.stringify(stored));
+    } catch (error) {
+      void addLog(
+        `Watch ack state failed to persist: ${String(error)}`,
+        'WARNING'
+      );
+    }
+  }, []);
+
+  const ensureAckStateHydrated = useCallback((): Promise<void> => {
+    ackStateHydrationRef.current ??= (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(ACK_STATE_STORAGE_KEY);
+        if (!raw) return;
+        const stored = JSON.parse(raw) as StoredAckState;
+        // Merged rather than assigned. A transfer can be handled while this read
+        // is still in flight, and an id recorded by that handler must not be
+        // dropped on the floor by a snapshot taken before it existed.
+        for (const id of stored.handledClientIds ?? []) {
+          handledClientIdsRef.current.add(id);
+        }
+        for (const id of stored.handledWaterClientIds ?? []) {
+          handledWaterClientIdsRef.current.add(id);
+        }
+        ackedClientIdsRef.current = [
+          ...new Set([
+            ...(stored.ackedClientIds ?? []),
+            ...ackedClientIdsRef.current,
+          ]),
+        ].slice(-20);
+        failedClientIdsRef.current = [
+          ...new Set([
+            ...(stored.failedClientIds ?? []),
+            ...failedClientIdsRef.current,
+          ]),
+        ].slice(-20);
+      } catch (error) {
+        // A corrupt or unreadable store leaves the refs as they are: dedupe is
+        // then only as good as this session, which is where it started.
+        void addLog(
+          `Watch ack state failed to load: ${String(error)}`,
+          'WARNING'
+        );
+      }
+    })();
+    return ackStateHydrationRef.current;
+  }, []);
+
   const handleCheckIn = useCallback(
     async (payload: WatchCheckInPayload): Promise<void> => {
       if (!WatchConnectivity) return;
+      await ensureAckStateHydrated();
       if (
         payload.clientId &&
         handledClientIdsRef.current.has(payload.clientId)
@@ -497,6 +760,7 @@ export function useWatchCheckInBridge(enabled: boolean): void {
           ...ackedClientIdsRef.current,
           payload.clientId,
         ].slice(-20);
+        await persistAckState();
 
         queryClient.setQueryData<CheckInMeasurement>(
           measurementsQueryKey(payload.entryDate),
@@ -523,7 +787,7 @@ export function useWatchCheckInBridge(enabled: boolean): void {
         await WatchConnectivity.sendAck(payload.clientId, false);
       }
     },
-    []
+    [ensureAckStateHydrated, persistAckState]
   );
 
   /**
@@ -538,10 +802,26 @@ export function useWatchCheckInBridge(enabled: boolean): void {
   const handleWaterTap = useCallback(
     async (payload: WatchWaterIntakePayload): Promise<void> => {
       if (!WatchConnectivity) return;
+      await ensureAckStateHydrated();
       if (
         payload.clientId &&
         handledWaterClientIdsRef.current.has(payload.clientId)
       ) {
+        // A resend of something we've already seen. Re-acknowledge it, the
+        // way `handleCheckIn` does: without this, a tap whose write landed but
+        // whose ack was lost would be deduped in silence on every retry and
+        // sit on the watch as `.queued` forever.
+        //
+        // Only when it actually landed, though. This set is reserved BEFORE
+        // the write, so an id in it may still be in flight — that attempt
+        // sends its own ack, success or failure, and claiming success here
+        // would be guessing at an outcome we don't have yet. The reservation
+        // is never persisted, so an id restored from disk is always one whose
+        // outcome was recorded: there is no restart in which this branch waits
+        // on an attempt that no longer exists.
+        if (ackedClientIdsRef.current.includes(payload.clientId)) {
+          await WatchConnectivity.sendAck(payload.clientId, true);
+        }
         return;
       }
       // Reserved BEFORE the write rather than after it. `changeWaterIntake` is
@@ -553,6 +833,16 @@ export function useWatchCheckInBridge(enabled: boolean): void {
       //
       // `handleCheckIn` can keep recording afterwards: it upserts by date, so
       // writing the same check-in twice is writing it once.
+      //
+      // Held in memory only, deliberately not persisted. Only outcomes we know
+      // go to disk. A reservation on disk outlives the attempt that made it, so
+      // a process that died mid-write would come back with the id reserved,
+      // absent from both the acked and failed lists, and nothing alive to
+      // resolve it — every resend silently suppressed and the tap `.queued`
+      // until midnight. Leaving it in memory means such a tap is simply retried:
+      // a possible duplicate, bounded to a crash inside the write itself, rather
+      // than a stall no one can clear. `clientId` never reaches the server, so
+      // there is no third option here short of idempotency at the write.
       if (payload.clientId)
         handledWaterClientIdsRef.current.add(payload.clientId);
 
@@ -576,6 +866,7 @@ export function useWatchCheckInBridge(enabled: boolean): void {
         failedClientIdsRef.current = failedClientIdsRef.current.filter(
           (id) => id !== payload.clientId
         );
+        await persistAckState();
         await WatchConnectivity.sendAck(payload.clientId, true);
 
         queryClient.invalidateQueries({
@@ -602,6 +893,7 @@ export function useWatchCheckInBridge(enabled: boolean): void {
             ...failedClientIdsRef.current,
             payload.clientId,
           ].slice(-20);
+          await persistAckState();
           await WatchConnectivity.sendAck(payload.clientId, false);
         }
         addLog(`Watch water tap failed to save: ${String(error)}`, 'ERROR');
@@ -610,7 +902,7 @@ export function useWatchCheckInBridge(enabled: boolean): void {
         await pushContextRef.current();
       }
     },
-    []
+    [ensureAckStateHydrated, persistAckState]
   );
 
   /**
@@ -621,13 +913,26 @@ export function useWatchCheckInBridge(enabled: boolean): void {
   const handleWaterDelete = useCallback(
     async (payload: WatchWaterDeletePayload): Promise<void> => {
       if (!WatchConnectivity) return;
+      await ensureAckStateHydrated();
       if (
         payload.clientId &&
         handledWaterClientIdsRef.current.has(payload.clientId)
       ) {
+        // A resend. Re-acknowledge one that already landed, so a watch whose
+        // ack was lost can settle it — same rule as `handleWaterTap`.
+        if (ackedClientIdsRef.current.includes(payload.clientId)) {
+          await WatchConnectivity.sendAck(payload.clientId, true);
+        }
         return;
       }
       if (!payload.entryId) return;
+      // Reserved before the write, like a tap's. A delete is idempotent at the
+      // server, but two in flight would have the second fail against a row
+      // that is already gone — reported to the watch as a failure it can do
+      // nothing about.
+      // In memory only, for the reason given in `handleWaterTap`.
+      if (payload.clientId)
+        handledWaterClientIdsRef.current.add(payload.clientId);
 
       const today = getTodayDate();
       try {
@@ -635,7 +940,16 @@ export function useWatchCheckInBridge(enabled: boolean): void {
         // no separate total adjustment to make here.
         await deleteWaterIntakeLogEntry(payload.entryId);
 
-        handledWaterClientIdsRef.current.add(payload.clientId);
+        ackedClientIdsRef.current = [
+          ...ackedClientIdsRef.current,
+          payload.clientId,
+        ].slice(-20);
+        failedClientIdsRef.current = failedClientIdsRef.current.filter(
+          (id) => id !== payload.clientId
+        );
+        await persistAckState();
+        await WatchConnectivity.sendAck(payload.clientId, true);
+
         queryClient.invalidateQueries({
           queryKey: dailySummaryQueryKey(today),
         });
@@ -646,13 +960,24 @@ export function useWatchCheckInBridge(enabled: boolean): void {
         addLog(`Watch deleted water log entry ${payload.entryId}`, 'INFO');
         await pushContextRef.current();
       } catch (error) {
+        // Released, so a resend can try again under the same id.
+        if (payload.clientId) {
+          handledWaterClientIdsRef.current.delete(payload.clientId);
+          failedClientIdsRef.current = [
+            ...failedClientIdsRef.current,
+            payload.clientId,
+          ].slice(-20);
+          await persistAckState();
+          await WatchConnectivity.sendAck(payload.clientId, false);
+        }
         addLog(`Watch water delete failed: ${String(error)}`, 'ERROR');
         // Re-push so the watch's optimistically-removed row comes back rather
-        // than staying gone on a screen that now disagrees with the server.
+        // than staying gone on a screen that now disagrees with the server,
+        // and so the failure reaches a watch that wasn't reachable above.
         await pushContextRef.current();
       }
     },
-    []
+    [ensureAckStateHydrated, persistAckState]
   );
 
   // Latest handlers, read by the subscriptions below.

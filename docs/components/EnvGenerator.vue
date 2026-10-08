@@ -73,6 +73,7 @@ const realIpHeader = ref<
   "none" | "CF-Connecting-IP" | "X-Forwarded-For" | "True-Client-IP"
 >("none");
 const trustedProxyHops = ref("1");
+const trustedProxies = ref("");
 const allowPrivateNetworkCors = ref(false);
 const extraTrustedOrigins = ref("");
 
@@ -104,6 +105,8 @@ const oidcClientSecret = ref("");
 const oidcAdminGroup = ref("Admin");
 const oidcScope = ref("openid email profile");
 const disableEmailLogin = ref(false);
+const disablePasskeyLogin = ref(false);
+const forcePasskeyLogin = ref(false);
 
 // --- 8. Email / SMTP (Optional) ---
 const smtpHost = ref("");
@@ -232,11 +235,13 @@ function applyPreset(preset: "simple" | "full") {
     enableGarmin.value = false;
     garminIsCn.value = false;
     realIpHeader.value = "none";
+    trustedProxies.value = "";
   } else if (preset === "full") {
     customFrontendUrl.value = "https://fitness.example.com";
     allowPrivateNetworkCors.value = false;
     realIpHeader.value = "CF-Connecting-IP";
     trustedProxyHops.value = "1";
+    trustedProxies.value = "";
     enableNetworkNginx.value = true;
     enableDbIdentity.value = true;
     enableServerRuntime.value = true;
@@ -378,6 +383,12 @@ TZ=${timezone.value}
     } else {
       out += `SPARKY_FITNESS_FORCE_EMAIL_LOGIN=${forceEmailLogin.value}\n`;
     }
+    // FORCE wins over DISABLE on the server, so emit only the one that applies.
+    if (forcePasskeyLogin.value) {
+      out += `SPARKY_FITNESS_FORCE_PASSKEY_LOGIN=true\n`;
+    } else if (disablePasskeyLogin.value) {
+      out += `SPARKY_FITNESS_DISABLE_PASSKEY_LOGIN=true\n`;
+    }
     if (disableSignup.value) {
       out += `SPARKY_FITNESS_DISABLE_SIGNUP=true\n`;
     }
@@ -459,6 +470,9 @@ NGINX_LISTEN_PORT=${nginxListenPort.value}
       out += `SPARKY_FITNESS_REAL_IP_HEADER=${realIpHeader.value}\n`;
     } else {
       out += `SPARKY_FITNESS_TRUSTED_PROXY_HOPS=${trustedProxyHops.value}\n`;
+    }
+    if (trustedProxies.value.trim()) {
+      out += `SPARKY_FITNESS_TRUSTED_PROXIES=${trustedProxies.value.trim()}\n`;
     }
   }
 
@@ -1090,6 +1104,32 @@ onMounted(() => {
                 existing session to register.</template
               >
             </span>
+            <label class="checkbox-label" style="margin-top: 10px">
+              <input v-model="disablePasskeyLogin" type="checkbox" />
+              <span class="checkbox-text">
+                Disable Passkey Login
+                <code class="var-badge"
+                  >SPARKY_FITNESS_DISABLE_PASSKEY_LOGIN=true</code
+                >
+              </span>
+            </label>
+            <span class="field-hint" style="margin-left: 26px"
+              >Removes passkey sign-in and adding new passkeys, overriding the
+              admin switch. Existing passkeys stay stored.</span
+            >
+            <label class="checkbox-label" style="margin-top: 10px">
+              <input v-model="forcePasskeyLogin" type="checkbox" />
+              <span class="checkbox-text">
+                Force Passkey Login On
+                <code class="var-badge"
+                  >SPARKY_FITNESS_FORCE_PASSKEY_LOGIN=true</code
+                >
+              </span>
+            </label>
+            <span class="field-hint" style="margin-left: 26px"
+              >Fail-safe: keeps passkey login on even if it was turned off in
+              the admin settings, and overrides Disable Passkey Login.</span
+            >
           </div>
 
           <!-- Network access policy: moved here from the Nginx module. -->
@@ -1696,7 +1736,10 @@ onMounted(() => {
                 placeholder="127.0.0.11"
               />
               <span class="field-hint"
-                >DNS server for dynamic upstream resolution. Defaults to auto-detecting nameservers from <code>/etc/resolv.conf</code> (Docker default: <code>127.0.0.11</code>).</span
+                >DNS server for dynamic upstream resolution. Defaults to
+                auto-detecting nameservers from
+                <code>/etc/resolv.conf</code> (Docker default:
+                <code>127.0.0.11</code>).</span
               >
             </div>
             <div class="form-group">
@@ -1737,8 +1780,30 @@ onMounted(() => {
                 placeholder="1"
               />
               <span class="field-hint"
-                >Number of proxy layers between client and server. Default:
-                <code>1</code>.</span
+                >Number of reverse proxy layers between client and backend.
+                Default: <code>1</code> (bundled frontend Nginx). Behind an
+                external reverse proxy (e.g. NPM, Traefik, Caddy), set to
+                <code>2</code>.</span
+              >
+            </div>
+            <div class="form-group" v-if="realIpHeader === 'none'">
+              <label
+                >Trusted Proxy CIDRs
+                <code class="var-badge"
+                  >SPARKY_FITNESS_TRUSTED_PROXIES</code
+                ></label
+              >
+              <input
+                v-model="trustedProxies"
+                type="text"
+                class="text-input"
+                placeholder="192.168.1.50, 172.20.0.0/16"
+              />
+              <span class="field-hint"
+                >Enter only trusted proxy IPs or a proxy-only subnet (e.g.
+                <code>192.168.1.50, 172.20.0.0/16</code>). Every host in a
+                trusted range can forward client IPs; avoid broad private
+                ranges.</span
               >
             </div>
           </div>

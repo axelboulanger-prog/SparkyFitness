@@ -8,6 +8,7 @@ import {
 } from '../../src/hooks/useFasting';
 import {
   scheduleFastGoalNotification,
+  scheduleFastPreEndNotification,
   cancelScheduledNotification,
 } from '../../src/services/notifications';
 import {
@@ -18,12 +19,17 @@ import type { FastingLog } from '../../src/types/fasting';
 
 jest.mock('../../src/services/notifications', () => ({
   scheduleFastGoalNotification: jest.fn(),
+  scheduleFastPreEndNotification: jest.fn(),
   cancelScheduledNotification: jest.fn(),
 }));
 
 const mockSchedule = scheduleFastGoalNotification as jest.MockedFunction<
   typeof scheduleFastGoalNotification
 >;
+const mockSchedulePreEnd =
+  scheduleFastPreEndNotification as jest.MockedFunction<
+    typeof scheduleFastPreEndNotification
+  >;
 const mockCancel = cancelScheduledNotification as jest.MockedFunction<
   typeof cancelScheduledNotification
 >;
@@ -52,6 +58,7 @@ describe('reconcileFastGoalNotification', () => {
     __resetFastingReconcileStateForTests();
     await AsyncStorage.clear();
     mockSchedule.mockReset().mockResolvedValue('notif-1');
+    mockSchedulePreEnd.mockReset().mockResolvedValue('notif-pre-1');
     mockCancel.mockReset().mockResolvedValue(undefined);
   });
 
@@ -61,11 +68,14 @@ describe('reconcileFastGoalNotification', () => {
 
     expect(mockSchedule).toHaveBeenCalledTimes(1);
     expect(mockSchedule).toHaveBeenCalledWith(fast.target_end_time);
+    expect(mockSchedulePreEnd).toHaveBeenCalledTimes(1);
+    expect(mockSchedulePreEnd).toHaveBeenCalledWith(fast.target_end_time, 30);
     const stored = await AsyncStorage.getItem(GOAL_NOTIF_STORAGE_KEY);
     expect(JSON.parse(stored as string)).toEqual({
       fastId: 'fast-1',
       target: fast.target_end_time,
       notificationId: 'notif-1',
+      preEndNotificationId: 'notif-pre-1',
     });
   });
 
@@ -74,6 +84,7 @@ describe('reconcileFastGoalNotification', () => {
     await reconcileFastGoalNotification(fast);
     await reconcileFastGoalNotification(fast);
     expect(mockSchedule).toHaveBeenCalledTimes(1);
+    expect(mockSchedulePreEnd).toHaveBeenCalledTimes(1);
   });
 
   test('cancels and forgets when there is no active fast', async () => {
@@ -81,6 +92,7 @@ describe('reconcileFastGoalNotification', () => {
     await reconcileFastGoalNotification(null);
 
     expect(mockCancel).toHaveBeenCalledWith('notif-1');
+    expect(mockCancel).toHaveBeenCalledWith('notif-pre-1');
     expect(await AsyncStorage.getItem(GOAL_NOTIF_STORAGE_KEY)).toBeNull();
   });
 
@@ -88,26 +100,31 @@ describe('reconcileFastGoalNotification', () => {
     await reconcileFastGoalNotification(activeFast());
     await reconcileFastGoalNotification(activeFast({ status: 'COMPLETED' }));
     expect(mockCancel).toHaveBeenCalledWith('notif-1');
+    expect(mockCancel).toHaveBeenCalledWith('notif-pre-1');
   });
 
   test('schedules nothing when the active fast has a null target', async () => {
     await reconcileFastGoalNotification(activeFast({ target_end_time: null }));
     expect(mockSchedule).not.toHaveBeenCalled();
+    expect(mockSchedulePreEnd).not.toHaveBeenCalled();
     expect(await AsyncStorage.getItem(GOAL_NOTIF_STORAGE_KEY)).toBeNull();
   });
 
   test('replaces a stale notification when the active fast changes', async () => {
     await reconcileFastGoalNotification(activeFast({ id: 'fast-1' }));
     mockSchedule.mockResolvedValueOnce('notif-2');
+    mockSchedulePreEnd.mockResolvedValueOnce('notif-pre-2');
     const secondFast = activeFast({ id: 'fast-2' });
     await reconcileFastGoalNotification(secondFast);
 
     expect(mockCancel).toHaveBeenCalledWith('notif-1');
+    expect(mockCancel).toHaveBeenCalledWith('notif-pre-1');
     const stored = await AsyncStorage.getItem(GOAL_NOTIF_STORAGE_KEY);
     expect(JSON.parse(stored as string)).toEqual({
       fastId: 'fast-2',
       target: secondFast.target_end_time,
       notificationId: 'notif-2',
+      preEndNotificationId: 'notif-pre-2',
     });
   });
 
@@ -118,12 +135,14 @@ describe('reconcileFastGoalNotification', () => {
     // Same fast id, but the goal was edited (e.g. on web) to a later target.
     const newTarget = new Date(Date.now() + 12 * HOUR).toISOString();
     mockSchedule.mockResolvedValueOnce('notif-2');
+    mockSchedulePreEnd.mockResolvedValueOnce('notif-pre-2');
     await reconcileFastGoalNotification(
       activeFast({ target_end_time: newTarget })
     );
 
     // Old alert cancelled, new one scheduled for the new target.
     expect(mockCancel).toHaveBeenCalledWith('notif-1');
+    expect(mockCancel).toHaveBeenCalledWith('notif-pre-1');
     expect(mockSchedule).toHaveBeenLastCalledWith(newTarget);
     expect(mockSchedule).toHaveBeenCalledTimes(2);
     const stored = await AsyncStorage.getItem(GOAL_NOTIF_STORAGE_KEY);
@@ -131,6 +150,7 @@ describe('reconcileFastGoalNotification', () => {
       fastId: 'fast-1',
       target: newTarget,
       notificationId: 'notif-2',
+      preEndNotificationId: 'notif-pre-2',
     });
   });
 
@@ -154,6 +174,7 @@ describe('cancelFastGoalNotification', () => {
     __resetFastingReconcileStateForTests();
     await AsyncStorage.clear();
     mockSchedule.mockReset().mockResolvedValue('notif-1');
+    mockSchedulePreEnd.mockReset().mockResolvedValue('notif-pre-1');
     mockCancel.mockReset().mockResolvedValue(undefined);
   });
 
@@ -161,6 +182,7 @@ describe('cancelFastGoalNotification', () => {
     await reconcileFastGoalNotification(activeFast());
     await cancelFastGoalNotification();
     expect(mockCancel).toHaveBeenCalledWith('notif-1');
+    expect(mockCancel).toHaveBeenCalledWith('notif-pre-1');
     expect(await AsyncStorage.getItem(GOAL_NOTIF_STORAGE_KEY)).toBeNull();
   });
 
@@ -176,6 +198,7 @@ describe('useFastingGoalReconciler notification preferences', () => {
     __resetAppPreferencesStoreForTests();
     await AsyncStorage.clear();
     mockSchedule.mockReset().mockResolvedValue('notif-1');
+    mockSchedulePreEnd.mockReset().mockResolvedValue('notif-pre-1');
     mockCancel.mockReset().mockResolvedValue(undefined);
   });
 
@@ -192,9 +215,11 @@ describe('useFastingGoalReconciler notification preferences', () => {
     });
 
     await waitFor(() => expect(mockCancel).toHaveBeenCalledWith('notif-1'));
+    expect(mockCancel).toHaveBeenCalledWith('notif-pre-1');
     expect(await AsyncStorage.getItem(GOAL_NOTIF_STORAGE_KEY)).toBeNull();
 
     mockSchedule.mockResolvedValueOnce('notif-2');
+    mockSchedulePreEnd.mockResolvedValueOnce('notif-pre-2');
     act(() => {
       useAppPreferencesStore
         .getState()
@@ -217,6 +242,7 @@ describe('useFastingGoalReconciler notification preferences', () => {
     });
 
     await waitFor(() => expect(mockCancel).toHaveBeenCalledWith('notif-1'));
+    expect(mockCancel).toHaveBeenCalledWith('notif-pre-1');
     expect(await AsyncStorage.getItem(GOAL_NOTIF_STORAGE_KEY)).toBeNull();
   });
 

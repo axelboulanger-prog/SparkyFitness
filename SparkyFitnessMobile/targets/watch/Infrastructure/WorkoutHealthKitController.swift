@@ -17,7 +17,7 @@ final class WorkoutHealthKitController: NSObject {
 
     /// Fired on every fresh HR reading HealthKit reports, for the header's
     /// live BPM. Always called on the main queue.
-    var onHeartRate: ((Double) -> Void)?
+    var onHeartRate: ((Double, Date) -> Void)?
     /// Fired periodically with whatever samples accumulated since the last
     /// flush, for `heartRateBatch` transfers. Always called on the main queue.
     var onBatchReady: (([HeartRateSample]) -> Void)?
@@ -42,6 +42,10 @@ final class WorkoutHealthKitController: NSObject {
     /// so a late `stop` path can tell that `pendingSamples` and
     /// `pendingSampleTimes` now belong to another session. Main queue only.
     private var sessionGeneration = 0
+    /// Builders `discard` has thrown away. A statistics callback can still
+    /// land on main afterwards, including from an older session than the one
+    /// most recently discarded, and must not reach the workout now running.
+    private var discardedBuilderIds: Set<ObjectIdentifier> = []
     private let instantFormatter = ISO8601DateFormatter()
 
     /// How often accumulated samples are flushed to `onBatchReady`.
@@ -188,7 +192,10 @@ final class WorkoutHealthKitController: NSObject {
     /// as a plain timer/set tracker either way, just without live HR).
     /// - Parameter sessionId: the Sparky live-workout session this belongs to,
     ///   stamped into the saved workout's metadata as the own-write marker.
-    func start(sessionId: String) {
+    /// - Parameter workoutName: the preset's name, saved as the workout's
+    ///   brand name — the title Fitness shows in its Sessions list instead of
+    ///   the bare activity type.
+    func start(sessionId: String, workoutName: String) {
         guard HKHealthStore.isHealthDataAvailable(), session == nil else { return }
 
         let configuration = HKWorkoutConfiguration()
@@ -217,9 +224,14 @@ final class WorkoutHealthKitController: NSObject {
             // Metadata must be added during an active collection — firing it
             // in parallel with beginCollection raced and could drop the
             // own-write marker the phone uses to skip this workout on sync.
+            var metadata: [String: Any] = [Self.sessionMetadataKey: sessionId]
+            let title = workoutName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !title.isEmpty {
+                metadata[HKMetadataKeyWorkoutBrandName] = title
+            }
             newBuilder.beginCollection(withStart: now) { success, _ in
                 guard success else { return }
-                newBuilder.addMetadata([Self.sessionMetadataKey: sessionId]) { _, _ in }
+                newBuilder.addMetadata(metadata) { _, _ in }
             }
             startHeartRateSeriesQuery(from: now)
             startBatchTimer()
@@ -342,6 +354,24 @@ final class WorkoutHealthKitController: NSObject {
         }
     }
 
+    /// Ends the session and throws the workout away: nothing is saved to
+    /// Health and no heart rate is sent. Safe with no session running.
+    func discard() {
+        stopBatchTimer()
+        stopHeartRateSeriesQuery()
+        pendingSamples = []
+        pendingSampleTimes = []
+        sessionGeneration += 1
+        guard let session, let endingBuilder = builder else { return }
+        discardedBuilderIds.insert(ObjectIdentifier(endingBuilder))
+        session.end()
+        self.session = nil
+        self.builder = nil
+        endingBuilder.endCollection(withEnd: Date()) { _, _ in
+            endingBuilder.discardWorkout()
+        }
+    }
+
     /// Heart rate saved with the workout carrying this session's own-write
     /// marker, for a finish whose tail never reached the phone. Readings at or
     /// before `sentThrough` were already sent and are skipped.
@@ -461,10 +491,13 @@ final class WorkoutHealthKitController: NSObject {
         // because it comes from the builder's statistics instead). The
         // anchored query's `updateHandler` keeps delivering every sample the
         // live data source saves until the query is stopped.
+        // Read on main (this runs there), so a callback still in flight after
+        // `discard` or a newer `start` can tell the buffer is no longer its own.
+        let generation = sessionGeneration
         let handleSamples: ([HKSample]?) -> Void = { [weak self] samples in
             guard let self, let samples else { return }
             for case let sample as HKQuantitySample in samples {
-                self.ingest(sample)
+                self.ingest(sample, generation: generation)
             }
         }
         let query = HKAnchoredObjectQuery(
@@ -488,14 +521,15 @@ final class WorkoutHealthKitController: NSObject {
     /// several readings is walked with a one-shot series query scoped to that
     /// sample — correct here, unlike at workout start, because the sample
     /// already exists — so the zone calculator gets each interior reading.
-    private func ingest(_ sample: HKQuantitySample) {
+    private func ingest(_ sample: HKQuantitySample, generation: Int) {
         let bpmUnit = HKUnit.count().unitDivided(by: .minute())
         guard sample.count > 1 else {
             let bpm = sample.quantity.doubleValue(for: bpmUnit)
             guard bpm > 0 else { return }
             let interval = DateInterval(start: sample.startDate, end: sample.endDate)
             DispatchQueue.main.async { [weak self] in
-                self?.ingestSeriesQuantity(bpm: bpm, interval: interval)
+                guard let self, self.sessionGeneration == generation else { return }
+                self.ingestSeriesQuantity(bpm: bpm, interval: interval)
             }
             return
         }
@@ -507,7 +541,8 @@ final class WorkoutHealthKitController: NSObject {
             let bpm = quantity.doubleValue(for: bpmUnit)
             guard bpm > 0 else { return }
             DispatchQueue.main.async {
-                self?.ingestSeriesQuantity(bpm: bpm, interval: dateInterval)
+                guard let self, self.sessionGeneration == generation else { return }
+                self.ingestSeriesQuantity(bpm: bpm, interval: dateInterval)
             }
         }
         healthStore.execute(seriesQuery)
@@ -651,7 +686,7 @@ final class WorkoutHealthKitController: NSObject {
         if pendingSampleTimes.contains(t) { return }
         pendingSampleTimes.insert(t)
         pendingSamples.append(HeartRateSample(t: t, bpm: bpm))
-        onHeartRate?(bpm)
+        onHeartRate?(bpm, date)
     }
 }
 
@@ -718,7 +753,10 @@ extension WorkoutHealthKitController: HKLiveWorkoutBuilderDelegate {
             let bpm = quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
             if bpm > 0 {
                 DispatchQueue.main.async { [weak self] in
-                    self?.appendSample(at: interval.end, bpm: bpm)
+                    guard let self,
+                          !self.discardedBuilderIds.contains(ObjectIdentifier(workoutBuilder))
+                    else { return }
+                    self.appendSample(at: interval.end, bpm: bpm)
                 }
             }
         }
@@ -729,7 +767,10 @@ extension WorkoutHealthKitController: HKLiveWorkoutBuilderDelegate {
            let statistics = workoutBuilder.statistics(for: activeEnergyType),
            let kcal = statistics.sumQuantity()?.doubleValue(for: .kilocalorie()) {
             DispatchQueue.main.async { [weak self] in
-                self?.onActiveEnergy?(kcal)
+                guard let self,
+                      !self.discardedBuilderIds.contains(ObjectIdentifier(workoutBuilder))
+                else { return }
+                self.onActiveEnergy?(kcal)
             }
         }
     }

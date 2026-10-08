@@ -33,6 +33,16 @@ export function weightFromKg(kg: number, unit: 'kg' | 'lbs'): number {
   return unit === 'lbs' ? kgToLbs(kg) : kg;
 }
 
+/**
+ * A stored kg weight in `unit`, rounded to what was typed: storage is
+ * numeric(6,2) kg, so 90 lb reads back as 89.99… lb and 5 lb as 4.997… lb.
+ * One decimal restores a pound value, two a kilogram one.
+ */
+export function storedWeightInUnit(kg: number, unit: 'kg' | 'lbs'): number {
+  const factor = unit === 'lbs' ? 10 : 100;
+  return Math.round(weightFromKg(kg, unit) * factor) / factor;
+}
+
 /** Split a kg value into whole stones + remaining lbs. */
 export function kgToStonesLbs(kg: number): { stones: number; lbs: number } {
   const totalLbs = kgToLbs(kg);

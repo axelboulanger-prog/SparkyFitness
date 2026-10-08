@@ -119,23 +119,20 @@ jest.mock('victory-native', () => {
       );
     },
     Bar: () => null,
-  };
-});
-
-jest.mock('@shopify/react-native-skia', () => {
-  const ReactModule = require('react');
-  const { View } = require('react-native');
-  return {
+    // `TrendGoalLine` draws its stepped goal line through this same `Line`.
     Line: ({ children, ...props }: Record<string, unknown>) =>
       ReactModule.createElement(
         View,
         { testID: 'goal-line', ...props },
         children
       ),
-    DashPathEffect: () => null,
-    matchFont: jest.fn(() => null),
   };
 });
+
+jest.mock('@shopify/react-native-skia', () => ({
+  DashPathEffect: () => null,
+  matchFont: jest.fn(() => null),
+}));
 
 describe('HydrationBarChart goal line', () => {
   const data: HydrationDataPoint[] = [
@@ -143,7 +140,7 @@ describe('HydrationBarChart goal line', () => {
     { day: '2026-06-02', milliliters: 750 },
   ];
 
-  test('converts a millilitre goal into the display unit before it reaches the line', () => {
+  test("converts each day's millilitre goal into the display unit before it reaches the line", () => {
     render(
       <HydrationBarChart
         data={data}
@@ -151,17 +148,17 @@ describe('HydrationBarChart goal line', () => {
         isError={false}
         range="7d"
         unit="oz"
-        goal={2500}
+        goals={[2000, 2500]}
       />
     );
 
-    const expectedGoalInOz = volumeFromMl(2500, 'oz');
-    expect(screen.getByTestId('goal-line').props.p1.y).toBeCloseTo(
-      expectedGoalInOz
-    );
+    const goalLine = screen.getByTestId('goal-line');
+    const interior = goalLine.props.points.slice(1, -1);
+    expect(interior[0].y).toBeCloseTo(volumeFromMl(2000, 'oz'));
+    expect(interior[1].y).toBeCloseTo(volumeFromMl(2500, 'oz'));
   });
 
-  test('renders no goal line when no goal is supplied', () => {
+  test('renders no goal line when no goals is supplied', () => {
     render(
       <HydrationBarChart
         data={data}

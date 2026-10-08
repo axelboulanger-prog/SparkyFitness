@@ -48,27 +48,22 @@ jest.mock('victory-native', () => {
         children(renderArg)
       );
     },
+    // `TrendGoalLine` draws its stepped goal line through this same `Line`, distinguished
+    // here by `curveType` -- the weight data series always uses "cardinal".
     Line: (props: Record<string, unknown>) =>
-      ReactModule.createElement(View, { testID: 'line-mark', ...props }),
+      ReactModule.createElement(View, {
+        testID: props.curveType === 'stepAfter' ? 'goal-line' : 'line-mark',
+        ...props,
+      }),
     Scatter: (props: Record<string, unknown>) =>
       ReactModule.createElement(View, { testID: 'scatter-mark', ...props }),
   };
 });
 
-jest.mock('@shopify/react-native-skia', () => {
-  const ReactModule: typeof import('react') = require('react');
-  const { View }: typeof import('react-native') = require('react-native');
-  return {
-    Line: ({ children, ...props }: Record<string, unknown>) =>
-      ReactModule.createElement(
-        View,
-        { testID: 'goal-line', ...props },
-        children
-      ),
-    DashPathEffect: () => null,
-    matchFont: jest.fn(() => null),
-  };
-});
+jest.mock('@shopify/react-native-skia', () => ({
+  DashPathEffect: () => null,
+  matchFont: jest.fn(() => null),
+}));
 
 const weightSeries = (count: number): WeightDataPoint[] =>
   Array.from({ length: count }, (_, index) => ({
@@ -146,7 +141,9 @@ describe('WeightLineChart', () => {
   it('renders a dashed goal line at the goal value', () => {
     renderChart(weightSeries(3), 65);
 
-    expect(screen.getByTestId('goal-line').props.p1).toEqual({ x: 0, y: 65 });
+    const goalLine = screen.getByTestId('goal-line');
+    expect(goalLine.props.points[0]).toMatchObject({ x: 0, y: 65 });
+    expect(goalLine.props.points.at(-1)).toMatchObject({ x: 100, y: 65 });
   });
 
   it('renders no goal line when there is no goal', () => {

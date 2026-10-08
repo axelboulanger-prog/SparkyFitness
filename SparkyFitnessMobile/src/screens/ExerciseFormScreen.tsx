@@ -47,6 +47,9 @@ const CATEGORY_OPTIONS = [
 const MODALITY_OPTIONS = [
   { value: 'weight_reps' },
   { value: 'reps_only' },
+  { value: 'bodyweight_reps' },
+  { value: 'weight_distance' },
+  { value: 'weight_duration' },
   { value: 'duration' },
   { value: 'duration_distance' },
 ] as const;

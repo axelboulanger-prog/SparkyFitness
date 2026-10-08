@@ -1,4 +1,7 @@
-import { computeNiceYAxisScale } from '../../../src/components/charts/chartFormatting';
+import {
+  computeNiceYAxisScale,
+  measureLabelColumnWidth,
+} from '../../../src/components/charts/chartFormatting';
 
 describe('computeNiceYAxisScale', () => {
   test('steps by a nice round 500 for a hydration-sized domain', () => {
@@ -75,5 +78,28 @@ describe('computeNiceYAxisScale', () => {
         computeNiceYAxisScale(min, max).tickValues.length
       ).toBeGreaterThanOrEqual(3);
     }
+  });
+});
+
+describe('measureLabelColumnWidth', () => {
+  test('returns the fallback width when there are no labels', () => {
+    expect(measureLabelColumnWidth([], () => 999, 44)).toBe(44);
+  });
+
+  test('sizes to the widest label plus a small gap, not the fallback', () => {
+    const widths: Record<string, number> = {
+      '23': 12,
+      '01': 12,
+      '12 AM': 30,
+    };
+    const measureText = (label: string) => widths[label];
+
+    expect(
+      measureLabelColumnWidth(['23', '01', '12 AM'], measureText, 44)
+    ).toBe(36);
+  });
+
+  test('rounds a fractional measurement up', () => {
+    expect(measureLabelColumnWidth(['23'], () => 12.2, 44)).toBe(19);
   });
 });

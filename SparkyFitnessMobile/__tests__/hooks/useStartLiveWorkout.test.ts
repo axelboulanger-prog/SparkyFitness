@@ -3,6 +3,7 @@ import { Alert } from 'react-native';
 import Toast from 'react-native-toast-message';
 import type { PresetSessionResponse } from '@workspace/shared';
 import {
+  __resetLiveWorkoutStartForTests,
   armWatchForActiveSession,
   syncWatchIntervalTiming,
   useStartLiveWorkout,
@@ -158,6 +159,7 @@ describe('useStartLiveWorkout', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     __resetActiveWorkoutStoreForTests();
+    __resetLiveWorkoutStartForTests();
     alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
     mockCreateWorkout.mockResolvedValue(makeSession());
   });
@@ -191,6 +193,52 @@ describe('useStartLiveWorkout', () => {
     expect(navigation.replace).toHaveBeenCalledWith('ActiveWorkout');
   });
 
+  it('lets only one caller create a session when the phone and the watch start together', async () => {
+    let resolveCreate: (session: PresetSessionResponse) => void = () =>
+      undefined;
+    mockCreateWorkout.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        })
+    );
+    const queryClient = createTestQueryClient();
+    queryClient.setQueryData(serverConnectionQueryKey, true);
+    const navigation = {
+      replace: jest.fn(),
+      navigate: jest.fn(),
+      isFocused: jest.fn(() => false),
+    };
+    const phone = renderHook(() => useStartLiveWorkout(navigation), {
+      wrapper: createQueryWrapper(queryClient),
+    });
+    const watch = renderHook(() => useStartLiveWorkout(navigation), {
+      wrapper: createQueryWrapper(queryClient),
+    });
+
+    let phoneDone: Promise<void> = Promise.resolve();
+    act(() => {
+      phoneDone = phone.result.current.startLiveWorkout({
+        name: 'Push Day',
+        exercises: EXERCISES,
+      });
+    });
+    await act(async () => {
+      await watch.result.current.startLiveWorkout({
+        name: 'Pull Day',
+        exercises: EXERCISES,
+      });
+    });
+    expect(mockCreateWorkout).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveCreate(makeSession());
+      await phoneDone;
+    });
+    expect(mockCreateWorkout).toHaveBeenCalledTimes(1);
+    expect(useActiveWorkoutStore.getState().sessionId).toBe('session-1');
+  });
+
   it('arms the watch with the interval format, cap, and start time', async () => {
     const { result } = setup();
     const before = Date.now();
@@ -221,6 +269,10 @@ describe('useStartLiveWorkout', () => {
     // The phone leads the cap with a 5s countdown, so 0:00 is cap + 5s.
     expect(Date.parse(payload.capEndsAt as string) - startedAt).toBe(
       (720 + 5) * 1000
+    );
+    // The arm time the phone's later target updates are tagged with.
+    expect(useActiveWorkoutStore.getState().watchArmedAt).toBe(
+      Date.parse(payload.armedAt as string)
     );
   });
 

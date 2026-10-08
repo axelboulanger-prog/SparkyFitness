@@ -7,11 +7,23 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { Trash2, Edit, Lock, RefreshCw, Link2Off } from 'lucide-react';
+import {
+  Trash2,
+  Edit,
+  Lock,
+  RefreshCw,
+  Link2Off,
+  Download,
+  Loader2,
+} from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
+import { useCnfStatusQuery } from '@/hooks/Foods/useCanadianNutrientFile';
 import { decodeYazioAppId } from '@/utils/settings';
 import { useExternalProviderTypesQuery } from '@/hooks/Settings/useExternalProviderSettings';
 import SyncRangeDialog from './SyncRangeDialog';
 import type { SyncMockOptions } from './SyncRangeDialog';
+import { CnfBulkImportDialog } from './CnfBulkImportDialog';
+import { Trans } from 'react-i18next';
 
 import {
   useConnectFitbitMutation,
@@ -104,6 +116,10 @@ const PROVIDER_PORTALS: Record<string, { label: string; url: string }> = {
     label: 'COROS Training Hub',
     url: 'https://t.coros.com',
   },
+  'canadian-nutrient-file': {
+    label: 'Health Canada CNF Open Data Portal',
+    url: 'https://open.canada.ca/data/en/dataset/1b6139bd-ed7e-4043-bc28-ff00e10f3109',
+  },
 };
 
 export const ProviderCard = ({
@@ -113,6 +129,11 @@ export const ProviderCard = ({
   isAdminMode = false,
 }: ProviderCardProps) => {
   const { user } = useAuth();
+  const [isCnfDialogOpen, setIsCnfDialogOpen] = useState(false);
+  const isCnf = provider.provider_type === 'canadian-nutrient-file';
+  const { data: cnfStatus } = useCnfStatusQuery({
+    enabled: isCnf && isAdminMode,
+  });
   const { data: providerTypes } = useExternalProviderTypesQuery();
   const yazioDisplay = decodeYazioAppId(provider.app_id);
   const {
@@ -495,6 +516,29 @@ export const ProviderCard = ({
             )}
         </div>
         <div className="flex items-center gap-2">
+          {isAdminMode && isCnf && (
+            <Button
+              variant={cnfStatus?.isRunning ? 'secondary' : 'outline'}
+              size="sm"
+              onClick={() => setIsCnfDialogOpen(true)}
+              disabled={loading}
+              title="Bulk Import / Re-Sync"
+              className="flex items-center gap-1.5"
+            >
+              {cnfStatus?.isRunning ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                  <span>Importing ({cnfStatus.progress}%)...</span>
+                </>
+              ) : (
+                <>
+                  <Download className="h-4 w-4" />
+                  <span>Bulk Import / Sync</span>
+                </>
+              )}
+            </Button>
+          )}
+
           {config?.hasToken ? (
             <Button
               variant="outline"
@@ -630,6 +674,57 @@ export const ProviderCard = ({
           </p>
         )}
 
+        {isCnf && (
+          <>
+            <p className="text-xs text-muted-foreground mt-1.5 max-w-2xl leading-relaxed">
+              <Trans
+                i18nKey="settings.cnf.providerCardLicence"
+                defaults="Contains information published by Health Canada licensed under the <1>Open Government Licence – Canada</1>. Supported languages: <3>English (en)</3> and <5>French (fr)</5>. <7>Canadian Nutrient File</7>"
+                components={{
+                  1: (
+                    <a
+                      href="https://open.canada.ca/en/open-government-licence-canada"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline font-medium"
+                    />
+                  ),
+                  3: <strong />,
+                  5: <strong />,
+                  7: (
+                    <a
+                      href="https://open.canada.ca/data/en/dataset/1b6139bd-ed7e-4043-bc28-ff00e10f3109"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline font-medium ml-1"
+                    />
+                  ),
+                }}
+              />
+            </p>
+
+            {cnfStatus?.isRunning && (
+              <div className="mt-3 space-y-2 rounded-lg border bg-muted/40 p-3 max-w-2xl">
+                <div className="flex items-center justify-between text-xs font-medium">
+                  <span className="flex items-center gap-1.5">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                    Importing catalog: {cnfStatus.processed} / {cnfStatus.total}{' '}
+                    foods
+                  </span>
+                  <span className="font-mono text-xs font-semibold">
+                    {cnfStatus.progress}%
+                  </span>
+                </div>
+                <Progress value={cnfStatus.progress} className="h-2" />
+                <div className="flex justify-between text-[11px] text-muted-foreground">
+                  <span>{cnfStatus.imported} imported</span>
+                  <span>{cnfStatus.updated} updated</span>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
         {provider.provider_type === 'free-exercise-db' && (
           <p className="text-xs text-muted-foreground mt-1.5 max-w-2xl leading-relaxed">
             Fetches exercise data directly from the community repository at{' '}
@@ -751,6 +846,13 @@ export const ProviderCard = ({
         onSync={executeSync}
         providerType={provider.provider_type}
       />
+
+      {isCnf && isAdminMode && (
+        <CnfBulkImportDialog
+          open={isCnfDialogOpen}
+          onOpenChange={setIsCnfDialogOpen}
+        />
+      )}
     </div>
   );
 };

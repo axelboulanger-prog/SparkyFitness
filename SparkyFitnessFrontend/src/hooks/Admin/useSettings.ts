@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { globalSettingsService } from '@/api/Admin/globalSettingsService';
 import { mockDataKeys, settingsKeys } from '@/api/keys/admin';
+import { authKeys } from '@/api/keys/auth';
 import { openFoodFactsContributionKeys } from '@/api/keys/settings';
 import { authClient } from '@/lib/auth-client';
 import { GlobalSettings } from '@/types/admin';
@@ -57,6 +58,8 @@ export const useUpdateSettings = () => {
         // stale answer until its staleTime expires, so turning the admin
         // toggle on appears to do nothing.
         queryClient.invalidateQueries({ queryKey: mockDataKeys.all }),
+        // Login options (email, passkey) derive from these settings.
+        queryClient.invalidateQueries({ queryKey: authKeys.settings }),
       ]);
     },
   });

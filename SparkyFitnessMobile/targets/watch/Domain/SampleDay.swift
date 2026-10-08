@@ -54,7 +54,16 @@ enum SampleDay {
         calorieProgress: 1,
         carbs: MacroGoal(consumed: 136, goal: 150, progress: 0.91),
         fat: MacroGoal(consumed: 66, goal: 60, progress: 1),
-        protein: MacroGoal(consumed: 112, goal: 179, progress: 0.63)
+        protein: MacroGoal(consumed: 112, goal: 179, progress: 0.63),
+        // The macros plus two the wearer added in Settings → Apple Watch: one
+        // with a goal and one without, the two ways a row can draw.
+        rows: [
+            NutrientRow(key: "protein", label: "Protein", unit: "g", consumed: 112, goal: 179, progress: 0.63),
+            NutrientRow(key: "carbs", label: "Carbs", unit: "g", consumed: 136, goal: 150, progress: 0.91),
+            NutrientRow(key: "fat", label: "Fat", unit: "g", consumed: 66, goal: 60, progress: 1),
+            NutrientRow(key: "dietary_fiber", label: "Fiber", unit: "g", consumed: 21, goal: 30, progress: 0.7),
+            NutrientRow(key: "sodium", label: "Sodium", unit: "mg", consumed: 1840, goal: nil, progress: 0),
+        ]
     )
 
     // MARK: - Weight history
@@ -101,9 +110,35 @@ enum SampleDay {
             waterContainers: containers,
             waterGoalMl: 2500,
             waterDisplayUnit: "liter",
-            generatedAt: Date()
+            generatedAt: Date(),
+            hapticsEnabled: true,
+            restAlertsEnabled: true,
+            pageOrder: nil,
+            hiddenPages: nil,
+            setInputStyle: nil,
+            startableWorkouts: startableWorkouts,
+            scheduledWorkouts: scheduledWorkouts
         )
     }
+
+    /// What the active plan puts on today, for the top of the workout picker.
+    static let scheduledWorkouts = [
+        ScheduledWorkout(
+            presetId: "sample-2",
+            name: "Day 1 — Push (5 Day)",
+            planName: "main",
+            caption: "Scheduled Today"
+        ),
+    ]
+
+    /// The saved workouts the idle workout page offers. Names run from one
+    /// word to a two-line one, since the picker has to wrap on a 40mm.
+    static let startableWorkouts = [
+        StartableWorkout(presetId: "sample-1", name: "2. Back and Biceps"),
+        StartableWorkout(presetId: "sample-2", name: "Day 1 — Push (5 Day)"),
+        StartableWorkout(presetId: "sample-3", name: "Day 1: Lower (3 Day)"),
+        StartableWorkout(presetId: "sample-4", name: "Legs"),
+    ]
 
     /// The state before the phone has ever synced — the other layout worth
     /// checking, since it's what a new install and a phone-free morning show.
@@ -159,12 +194,81 @@ enum SampleDay {
         setOrder: []
     )
 
+    /// A loaded hold with a countdown, then a plain hold: the timer card beside
+    /// the weight card.
+    static let timedPlan = ActiveWorkoutPlan(
+        sessionId: "preview-timed",
+        workoutName: "Core",
+        exercises: [
+            PlannedExercise(
+                exerciseEntryId: "preview-timed-1",
+                name: "Weighted Plank",
+                supersetRun: nil,
+                sets: [
+                    PlannedSet(setId: "t1", targetReps: nil, targetWeightKg: 10, restSeconds: 60, setType: "normal", targetDurationSec: 45, weighted: true),
+                    PlannedSet(setId: "t2", targetReps: nil, targetWeightKg: 10, restSeconds: 60, setType: "normal", targetDurationSec: 45, weighted: true),
+                ]
+            ),
+            PlannedExercise(
+                exerciseEntryId: "preview-timed-2",
+                name: "Side Plank",
+                supersetRun: nil,
+                sets: [
+                    PlannedSet(setId: "t3", targetReps: nil, targetWeightKg: nil, restSeconds: 45, setType: "normal", targetDurationSec: 30),
+                ]
+            ),
+        ],
+        setOrder: []
+    )
+
+    /// A hold with no planned length, so the stopwatch shows, with last
+    /// session's time in grey.
+    static let stopwatchPlan = ActiveWorkoutPlan(
+        sessionId: "preview-stopwatch",
+        workoutName: "Pull Day",
+        exercises: [
+            PlannedExercise(
+                exerciseEntryId: "preview-stopwatch-1",
+                name: "Dead Hang",
+                supersetRun: nil,
+                sets: [
+                    PlannedSet(setId: "w1", targetReps: nil, targetWeightKg: nil, restSeconds: 60, setType: "normal", previousDurationSec: 52, timed: true),
+                    PlannedSet(setId: "w2", targetReps: nil, targetWeightKg: nil, restSeconds: 60, setType: "normal", previousDurationSec: 48, timed: true),
+                ]
+            ),
+        ],
+        setOrder: []
+    )
+
+    /// An AMRAP the phone started a couple of minutes ago, for the caption.
+    static var intervalPlan: ActiveWorkoutPlan {
+        ActiveWorkoutPlan(
+            sessionId: "preview-interval",
+            workoutName: "Conditioning",
+            exercises: [
+                PlannedExercise(
+                    exerciseEntryId: "preview-interval-1",
+                    name: "Kettlebell Swing",
+                    supersetRun: nil,
+                    sets: [
+                        PlannedSet(setId: "i1", targetReps: 15, targetWeightKg: 16, restSeconds: 0, setType: "normal"),
+                        PlannedSet(setId: "i2", targetReps: 15, targetWeightKg: 16, restSeconds: 0, setType: "normal"),
+                    ]
+                ),
+            ],
+            setOrder: [],
+            workoutFormat: "amrap",
+            timeCapSeconds: 600,
+            startedAt: Date().addingTimeInterval(-130)
+        )
+    }
+
     /// A plausible working heart rate mid-set. Only ever visible in a preview
     /// or on a real wrist — the simulator has no sensor behind
     /// `HKLiveWorkoutBuilder`, so it renders the no-BPM layout instead.
     static let workoutBpm: Double = 142
 
     /// Active energy a few minutes into the session, for the metrics strip.
-    static let workoutKcal: Double = 84
+    static let workoutKcal: Double = 284
 }
 #endif

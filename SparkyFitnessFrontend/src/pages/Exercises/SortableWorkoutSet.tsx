@@ -16,7 +16,13 @@ import { CSS } from '@dnd-kit/utilities';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { excerciseWorkoutSetTypes } from '@/constants/excerciseWorkoutSetTypes';
-import { RIR_MAX, RIR_MIN } from '@workspace/shared';
+import {
+  RIR_MAX,
+  RIR_MIN,
+  carryDistanceFromKm,
+  carryDistanceToKm,
+} from '@workspace/shared';
+import { usePreferences } from '@/contexts/PreferencesContext';
 import { SetFieldKey, SortableSetData } from '@/types/workout';
 import {
   SET_TABLE_LAYOUT,
@@ -57,6 +63,7 @@ export const SortableSetItem = React.memo(
     showRir = false,
   }: SortableSetItemProps) => {
     const { t } = useTranslation();
+    const { distanceUnit } = usePreferences();
     const [showNotes, setShowNotes] = useState(!!set.notes);
     const { attributes, listeners, setNodeRef, transform, transition } =
       useSortable({
@@ -72,7 +79,7 @@ export const SortableSetItem = React.memo(
     const typeBadgeClass =
       SET_TYPE_STYLES[set.set_type ?? ''] ?? 'bg-muted text-muted-foreground';
     const layout = SET_TABLE_LAYOUT[modality];
-    const { showReps, showWeight } = layout;
+    const { showReps, showWeight, showDistance, signedWeight } = layout;
     const gridClass = showRir ? layout.gridClassWithRir : layout.gridClass;
     // Isometric sets predating the duration column stored their hold in `reps`.
     const durationValue =
@@ -149,6 +156,29 @@ export const SortableSetItem = React.memo(
               />
             )}
 
+            {/* Carry distance (stored in km, edited in metres/yards) */}
+            {showDistance && (
+              <NumericInput
+                className="h-8 text-sm"
+                placeholder="—"
+                decimals={1}
+                step={1}
+                value={
+                  set.distance != null
+                    ? carryDistanceFromKm(set.distance, distanceUnit)
+                    : null
+                }
+                onValueChange={(v) =>
+                  onSetChange(
+                    exerciseIndex,
+                    setIndex,
+                    'distance',
+                    v == null ? undefined : carryDistanceToKm(v, distanceUnit)
+                  )
+                }
+              />
+            )}
+
             {/* Weight */}
             {showWeight && (
               <UnitInput
@@ -156,7 +186,8 @@ export const SortableSetItem = React.memo(
                 inputClassName="h-8"
                 unit={weightUnit}
                 type="weight"
-                placeholder="—"
+                // Bodyweight: blank is body weight alone; + adds, − assists.
+                placeholder={signedWeight ? '±0' : '—'}
                 onChange={(v) =>
                   onSetChange(exerciseIndex, setIndex, 'weight', v)
                 }

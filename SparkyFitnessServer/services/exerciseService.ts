@@ -1094,7 +1094,10 @@ async function searchExternalExercises(
           id: exercise.id.toString(),
           name: exercise.name,
           category: exercise.category?.name ?? 'Uncategorized',
-          modality: deriveExerciseModality(exercise.category?.name),
+          modality: deriveExerciseModality(
+            exercise.category?.name,
+            exercise.equipment.map((e) => e.name)
+          ),
           calories_per_hour: 0,
           source: 'wger',
           description: instructions[0] ?? exercise.name,
@@ -1140,7 +1143,10 @@ async function searchExternalExercises(
         id: exercise.id,
         name: exercise.name,
         category: exercise.category,
-        modality: deriveExerciseModality(exercise.category),
+        modality: deriveExerciseModality(
+          exercise.category,
+          normalizeToStringArray(exercise.equipment)
+        ),
         calories_per_hour: 0,
         description: exercise.description,
         source: 'free-exercise-db',

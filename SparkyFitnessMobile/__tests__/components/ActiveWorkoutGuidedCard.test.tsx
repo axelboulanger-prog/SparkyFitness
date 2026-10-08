@@ -25,6 +25,7 @@ jest.mock('../../src/services/sounds', () => ({
   playRestCompleteSound: jest.fn(),
   willPlayRestCompleteSound: jest.fn(() => false),
   isRestTimerSoundEnabled: jest.fn(() => true),
+  setRestKeepAlive: jest.fn(),
 }));
 jest.mock('../../src/services/notifications', () => ({
   scheduleRestNotification: jest.fn(async () => 'notif'),

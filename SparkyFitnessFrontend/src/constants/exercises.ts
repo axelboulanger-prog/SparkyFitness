@@ -135,6 +135,21 @@ export const EXERCISE_MODALITY_OPTIONS = [
     defaultLabel: 'Reps',
   },
   {
+    value: 'bodyweight_reps',
+    labelKey: 'exercise.modality.bodyweightReps',
+    defaultLabel: 'Bodyweight (+/− weight)',
+  },
+  {
+    value: 'weight_distance',
+    labelKey: 'exercise.modality.weightDistance',
+    defaultLabel: 'Weight & Distance (carries)',
+  },
+  {
+    value: 'weight_duration',
+    labelKey: 'exercise.modality.weightDuration',
+    defaultLabel: 'Weight & Duration (loaded holds)',
+  },
+  {
     value: 'duration',
     labelKey: 'exercise.modality.duration',
     defaultLabel: 'Duration',
@@ -166,7 +181,15 @@ export const defaultSetForModality = (
         weight: null,
         duration: null,
       }
-    : { set_number: 1, set_type: 'Working Set', reps: 10, weight: null };
+    : modality === 'weight_duration' || modality === 'weight_distance'
+      ? {
+          set_number: 1,
+          set_type: 'Working Set',
+          reps: null,
+          weight: null,
+          duration: null,
+        }
+      : { set_number: 1, set_type: 'Working Set', reps: 10, weight: null };
 
 export const DAYS_OF_WEEK = [
   { id: 0, name: 'Sunday' },
@@ -332,6 +355,13 @@ export const SET_TABLE_LAYOUT: Record<
     gridClassWithRir: string;
     showReps: boolean;
     showWeight: boolean;
+    /** Carries record a distance (metres/yards) in place of reps. */
+    showDistance: boolean;
+    /**
+     * The weight column is added (+) or assisting (−) weight on top of body
+     * weight, so it takes negatives and is labelled as such.
+     */
+    signedWeight: boolean;
   }
 > = {
   weight_reps: {
@@ -341,6 +371,18 @@ export const SET_TABLE_LAYOUT: Record<
       'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
     showReps: true,
     showWeight: true,
+    showDistance: false,
+    signedWeight: false,
+  },
+  bodyweight_reps: {
+    gridClass:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    gridClassWithRir:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    showReps: true,
+    showWeight: true,
+    showDistance: false,
+    signedWeight: true,
   },
   reps_only: {
     gridClass: 'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
@@ -348,6 +390,8 @@ export const SET_TABLE_LAYOUT: Record<
       'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
     showReps: true,
     showWeight: false,
+    showDistance: false,
+    signedWeight: false,
   },
   duration: {
     gridClass: 'grid grid-cols-[20px_140px_1fr_1fr_1fr_72px] gap-1.5 grow',
@@ -355,6 +399,29 @@ export const SET_TABLE_LAYOUT: Record<
       'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
     showReps: false,
     showWeight: false,
+    showDistance: false,
+    signedWeight: false,
+  },
+  // Loaded holds: weight plus the always-present duration column.
+  weight_duration: {
+    gridClass: 'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    gridClassWithRir:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    showReps: false,
+    showWeight: true,
+    showDistance: false,
+    signedWeight: false,
+  },
+  // Carries: weight and distance (in the reps slot) plus optional duration.
+  weight_distance: {
+    gridClass:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    gridClassWithRir:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    showReps: false,
+    showWeight: true,
+    showDistance: true,
+    signedWeight: false,
   },
 };
 

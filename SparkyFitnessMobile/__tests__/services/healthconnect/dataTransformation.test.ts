@@ -10,6 +10,7 @@ import type {
   AggregatedSleepSession,
   TransformedExerciseSession,
 } from '../../../src/types/healthRecords';
+import { atLocalTime } from '../../helpers/localTime';
 
 jest.mock('../../../src/services/LogService', () => ({
   addLog: jest.fn(),
@@ -56,7 +57,7 @@ describe('transformHealthRecords', () => {
     test('transforms raw HeartRate records via value transformer', () => {
       const records = [
         {
-          startTime: '2024-01-15T08:00:00Z',
+          startTime: atLocalTime('2024-01-15', '08:00'),
           samples: [{ beatsPerMinute: 72 }],
         },
       ];
@@ -76,7 +77,10 @@ describe('transformHealthRecords', () => {
 
     test('transforms raw HeartRateVariabilityRmssd records via value transformer', () => {
       const records = [
-        { time: '2024-01-15T08:00:00Z', heartRateVariabilityMillis: 48 },
+        {
+          time: atLocalTime('2024-01-15', '08:00'),
+          heartRateVariabilityMillis: 48,
+        },
       ];
       const result = transformHealthRecords(records, {
         recordType: 'HeartRateVariabilityRmssd',
@@ -142,7 +146,10 @@ describe('transformHealthRecords', () => {
   describe('Weight records', () => {
     test('extracts value from record.weight.inKilograms', () => {
       const records = [
-        { time: '2024-01-15T08:00:00Z', weight: { inKilograms: 75.5 } },
+        {
+          time: atLocalTime('2024-01-15', '08:00'),
+          weight: { inKilograms: 75.5 },
+        },
       ];
       const result = transformHealthRecords(records, {
         recordType: 'Weight',
@@ -187,7 +194,10 @@ describe('transformHealthRecords', () => {
   describe('Height records', () => {
     test('extracts value from record.height.inMeters', () => {
       const records = [
-        { time: '2024-01-15T08:00:00Z', height: { inMeters: 1.75 } },
+        {
+          time: atLocalTime('2024-01-15', '08:00'),
+          height: { inMeters: 1.75 },
+        },
       ];
       const result = transformHealthRecords(records, {
         recordType: 'Height',
@@ -215,7 +225,10 @@ describe('transformHealthRecords', () => {
   describe('Distance records', () => {
     test('extracts value from record.distance.inMeters', () => {
       const records = [
-        { startTime: '2024-01-15T08:00:00Z', distance: { inMeters: 5000 } },
+        {
+          startTime: atLocalTime('2024-01-15', '08:00'),
+          distance: { inMeters: 5000 },
+        },
       ];
       const result = transformHealthRecords(records, {
         recordType: 'Distance',
@@ -242,7 +255,9 @@ describe('transformHealthRecords', () => {
 
   describe('FloorsClimbed records', () => {
     test('extracts value from record.floors', () => {
-      const records = [{ startTime: '2024-01-15T08:00:00Z', floors: 10 }];
+      const records = [
+        { startTime: atLocalTime('2024-01-15', '08:00'), floors: 10 },
+      ];
       const result = transformHealthRecords(records, {
         recordType: 'FloorsClimbed',
         unit: 'floors',
@@ -272,7 +287,7 @@ describe('transformHealthRecords', () => {
     test('splits into separate systolic and diastolic records', () => {
       const records = [
         {
-          time: '2024-01-15T08:00:00Z',
+          time: atLocalTime('2024-01-15', '08:00'),
           systolic: { inMillimetersOfMercury: 120.5 },
           diastolic: { inMillimetersOfMercury: 80.3 },
         },
@@ -351,8 +366,8 @@ describe('transformHealthRecords', () => {
     test('creates rich sleep object with all required fields', () => {
       const records = [
         {
-          startTime: '2024-01-15T22:00:00Z',
-          endTime: '2024-01-16T06:00:00Z',
+          startTime: atLocalTime('2024-01-15', '22:00'),
+          endTime: atLocalTime('2024-01-16', '06:00'),
         },
       ];
       const result = transformHealthRecords(records, {
@@ -366,8 +381,8 @@ describe('transformHealthRecords', () => {
         type: 'SleepSession',
         source: 'Health Connect',
         entry_date: '2024-01-16',
-        bedtime: '2024-01-15T22:00:00Z',
-        wake_time: '2024-01-16T06:00:00Z',
+        bedtime: atLocalTime('2024-01-15', '22:00'),
+        wake_time: atLocalTime('2024-01-16', '06:00'),
         duration_in_seconds: 28800, // 8 hours
         time_asleep_in_seconds: 28800,
       });
@@ -833,7 +848,9 @@ describe('transformHealthRecords', () => {
       }) as TransformedExerciseSession[];
 
       expect(result[0].activityType).toBe('Running');
+      expect(result[0].exercise_source_id).toBe('56');
       expect(result[1].activityType).toBe('Biking (Stationary)');
+      expect(result[1].exercise_source_id).toBe('9');
     });
 
     test('ignores a blank title', () => {
@@ -1315,14 +1332,19 @@ describe('transformHealthRecords', () => {
     });
 
     test('tries multiple date fields (time, startTime, timestamp, date)', () => {
-      // Use noon timestamps to avoid timezone boundary issues (toLocalDateString uses local time)
-      // For the date-only field, use a timestamp format since toLocalDateString converts
-      // date-only strings as UTC midnight which shifts in negative UTC offset timezones
+      // The date field uses a full timestamp: toLocalDateString reads a
+      // date-only string as UTC midnight, which shifts in zones behind UTC.
       const testCases = [
-        { time: '2024-01-15T12:00:00Z', basalMetabolicRate: 1500 },
-        { startTime: '2024-01-16T12:00:00Z', basalMetabolicRate: 1500 },
-        { timestamp: '2024-01-17T12:00:00Z', basalMetabolicRate: 1500 },
-        { date: '2024-01-18T12:00:00Z', basalMetabolicRate: 1500 },
+        { time: atLocalTime('2024-01-15', '12:00'), basalMetabolicRate: 1500 },
+        {
+          startTime: atLocalTime('2024-01-16', '12:00'),
+          basalMetabolicRate: 1500,
+        },
+        {
+          timestamp: atLocalTime('2024-01-17', '12:00'),
+          basalMetabolicRate: 1500,
+        },
+        { date: atLocalTime('2024-01-18', '12:00'), basalMetabolicRate: 1500 },
       ];
 
       testCases.forEach((record, index) => {
@@ -1779,7 +1801,7 @@ describe('transformHealthRecords', () => {
     test('CyclingPedalingCadence creates record for each sample', () => {
       const records = [
         {
-          startTime: '2024-01-15T08:00:00Z',
+          startTime: atLocalTime('2024-01-15', '08:00'),
           samples: [
             { revolutionsPerMinute: 80 },
             { revolutionsPerMinute: 85 },
@@ -1996,7 +2018,7 @@ describe('transformHealthRecords', () => {
     });
 
     test('IntermenstrualBleeding returns value 1', () => {
-      const records = [{ time: '2024-01-15T08:00:00Z' }];
+      const records = [{ time: atLocalTime('2024-01-15', '08:00') }];
       const result = transformHealthRecords(records, {
         recordType: 'IntermenstrualBleeding',
         unit: '',
@@ -2066,7 +2088,7 @@ describe('transformHealthRecords', () => {
   describe('error resilience', () => {
     test('continues processing when one record throws', () => {
       const badRecord = {
-        time: '2024-01-15T08:00:00Z',
+        time: atLocalTime('2024-01-15', '08:00'),
         weight: {
           inKilograms: {
             toFixed: () => {
@@ -2076,7 +2098,7 @@ describe('transformHealthRecords', () => {
         },
       };
       const goodRecord = {
-        time: '2024-01-16T08:00:00Z',
+        time: atLocalTime('2024-01-16', '08:00'),
         weight: { inKilograms: 75 },
       };
 

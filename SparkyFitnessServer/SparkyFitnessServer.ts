@@ -1,5 +1,6 @@
 import path from 'path';
 import { emailLoginGuard } from './middleware/emailLoginGuard.js';
+import { passkeyLoginGuard } from './middleware/passkeyLoginGuard.js';
 
 import fs from 'fs';
 import type { ServerResponse } from 'http';
@@ -12,6 +13,7 @@ import { bridgeBearerAuthHeader } from './utils/bearerAuthBridge.js';
 import { endPool } from './db/poolManager.js';
 import { log } from './config/logging.js';
 import { authenticate } from './middleware/authMiddleware.js';
+import { isReadOnlyApiKeyAuthMutation } from './middleware/readOnlyApiKeyGuard.js';
 import { requestLogger } from './middleware/requestLogger.js';
 import { applySignOutCookieCleanup } from './middleware/signOutCookieCleanup.js';
 import {
@@ -24,7 +26,6 @@ import {
 import {
   seedDemoUser,
   purgeDemoUserIfExists,
-  scheduleDemoMidnightReset,
 } from './services/demoSeedService.js';
 import { fromNodeHeaders } from 'better-auth/node';
 import foodRoutes from './routes/foodRoutes.js';
@@ -94,13 +95,11 @@ import cycleRoutesV2 from './routes/v2/cycleRoutes.js';
 import pregnancyRoutesV2 from './routes/v2/pregnancyRoutes.js';
 import reportRoutesV2 from './routes/v2/reportRoutes.js';
 import nutritionKineticsRoutesV2 from './routes/v2/nutritionKineticsRoutes.js';
+import mindfulnessRoutesV2 from './routes/v2/mindfulnessRoutes.js';
 import backupRoutes from './routes/backupRoutes.js';
 import errorHandler from './middleware/errorHandler.js';
 import reviewRoutes from './routes/reviewRoutes.js';
-import cron from 'node-cron';
-import { scheduleBackupsOnStartup } from './services/backupScheduler.js';
-import { scheduleOpenFoodFactsAutoSyncOnStartup } from './services/openFoodFactsAutoSyncScheduler.js';
-import { startProviderSyncSchedulers } from './services/providerSyncScheduler.js';
+import { scheduleBackgroundJobs } from './services/backgroundJobScheduler.js';
 // @ts-expect-error TS1192
 import dailySummaryRoutes from './routes/dailySummaryRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
@@ -121,11 +120,12 @@ import oidcSettingsRoutes from './routes/oidcSettingsRoutes.js';
 import adminAuthRoutes from './routes/adminAuthRoutes.js';
 import workoutPresetRoutes from './routes/workoutPresetRoutes.js';
 import workoutPlanTemplateRoutes from './routes/workoutPlanTemplateRoutes.js';
-import { cleanupSessions } from './auth.js';
-import { deleteExpiredTickets } from './services/passkeyTicketService.js';
 import { upsertEnvOidcProvider } from './utils/oidcEnvConfig.js';
 import userRepository from './models/userRepository.js';
 import genericHealthRoutes from './routes/genericHealthRoutes.js';
+
+import { clientIpMiddleware } from './utils/clientIp.js';
+import ipaddr from 'ipaddr.js';
 
 import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
@@ -137,18 +137,61 @@ const app = express();
 // where only the frontend container's nginx is in front. Add a hop for each
 // extra proxy (reverse proxy, tunnel connector, load balancer) or req.ip will
 // resolve to an internal address shared by every visitor.
+// Alternatively, SPARKY_FITNESS_TRUSTED_PROXIES can specify explicit CIDR blocks / IPs.
+const trustedProxiesEnv = process.env.SPARKY_FITNESS_TRUSTED_PROXIES?.trim();
 const trustedProxyHops = Number.parseInt(
   process.env.SPARKY_FITNESS_TRUSTED_PROXY_HOPS ?? '',
   10
 );
-app.set(
-  'trust proxy',
-  Number.isInteger(trustedProxyHops) && trustedProxyHops >= 0
-    ? trustedProxyHops
-    : 1
-);
+if (trustedProxiesEnv) {
+  const rawProxies = trustedProxiesEnv
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const validProxies = rawProxies.filter((p) => {
+    if (ipaddr.isValid(p)) return true;
+    try {
+      ipaddr.parseCIDR(p);
+      return true;
+    } catch {
+      console.warn(
+        `[WARN] Skipping invalid SPARKY_FITNESS_TRUSTED_PROXIES entry: "${p}"`
+      );
+      return false;
+    }
+  });
+  if (validProxies.length > 0) {
+    app.set('trust proxy', validProxies);
+  } else {
+    console.warn(
+      '[WARN] No valid CIDRs/IPs found in SPARKY_FITNESS_TRUSTED_PROXIES. Falling back to hop count.'
+    );
+    app.set(
+      'trust proxy',
+      Number.isInteger(trustedProxyHops) && trustedProxyHops >= 0
+        ? trustedProxyHops
+        : 1
+    );
+  }
+} else {
+  app.set(
+    'trust proxy',
+    Number.isInteger(trustedProxyHops) && trustedProxyHops >= 0
+      ? trustedProxyHops
+      : 1
+  );
+}
 // 304s from ETag revalidation break the iOS mobile app (#1353).
 app.set('etag', false);
+
+// Inject the canonical client IP into x-client-ip for Better Auth and downstream
+// handlers. Express computes req.ip using the 'trust proxy' configuration above
+// (or getClientIp resolves it from SPARKY_FITNESS_REAL_IP_HEADER).
+// Setting req.headers['x-client-ip'] ensures Better Auth can accurately identify
+// the real client IP behind reverse proxy chains instead of rejecting multi-hop
+// X-Forwarded-For headers and falling back to a shared rate-limit bucket.
+// Any client-supplied x-client-ip header is overwritten to prevent spoofing.
+app.use(clientIpMiddleware);
 const PORT = process.env.SPARKY_FITNESS_SERVER_PORT || 3010;
 console.log(
   `DEBUG: SPARKY_FITNESS_FRONTEND_URL is: ${process.env.SPARKY_FITNESS_FRONTEND_URL}`
@@ -267,6 +310,7 @@ const mountBetterAuth = () => {
   }
 };
 app.use(emailLoginGuard);
+app.use(passkeyLoginGuard);
 // Catch ALL requests starting with /api/auth early.
 app.use(async (req, res, next) => {
   if (req.originalUrl.startsWith('/api/auth') && betterAuthHandlerInstance) {
@@ -379,6 +423,17 @@ app.use(async (req, res, next) => {
       );
     }
 
+    // A read-only API key must not reach Better Auth's own mutations either
+    // (creating a new full-access key, changing the password, ...). These
+    // routes never pass through `authenticate`, so check here (issue #2678).
+    if (await isReadOnlyApiKeyAuthMutation(req)) {
+      log(
+        'warn',
+        `[AUTH HANDLER] Read-only API key refused for ${req.method} ${req.path}`
+      );
+      return res.status(403).json({ error: 'This API key is read-only.' });
+    }
+
     // 2. Manual Sign-Out Cleanup: preserve sparky_active_user_id delete
     // cookie across Better Auth's own Set-Cookie writes.
     if (req.method === 'POST' && req.path === '/api/auth/sign-out') {
@@ -443,7 +498,11 @@ const uploadsStaticOptions = {
 // This block MUST stay above the express.static mounts below — moving it after
 // them silently re-exposes every file. tests/uploadsStaticMount.test.ts guards
 // both the behavior and the source ordering.
-const SENSITIVE_UPLOAD_SUBTREES = new Set(['check-in', 'pregnancy']);
+const SENSITIVE_UPLOAD_SUBTREES = new Set([
+  'check-in',
+  'pregnancy',
+  'symptoms',
+]);
 app.use(['/uploads', '/api/uploads'], (req, res, next) => {
   // Match the path the way serve-static resolves it, not the way it was
   // written: a prefix test against the raw URL would not account for percent-
@@ -733,6 +792,7 @@ app.use('/api/v2/cycle', cycleRoutesV2);
 app.use('/api/v2/pregnancy', pregnancyRoutesV2);
 app.use('/api/v2/reports', reportRoutesV2);
 app.use('/api/v2/nutrition', nutritionKineticsRoutesV2);
+app.use('/api/v2/mindfulness', mindfulnessRoutesV2);
 app.use('/api/workout-presets', workoutPresetRoutes);
 app.use('/api/workout-plan-templates', workoutPlanTemplateRoutes);
 app.use('/api/review', reviewRoutes);
@@ -753,29 +813,6 @@ app.get(
 );
 app.get('/api/api-docs/json', (_req, res) => res.json(swaggerSpecs));
 app.get('/api/api-docs', (_req, res) => res.redirect('/api/api-docs/swagger'));
-// Backup scheduling is handled by services/backupScheduler.ts
-// Session cleanup scheduling
-const scheduleSessionCleanup = async () => {
-  // Run every day at 3 AM
-  cron.schedule('0 3 * * *', async () => {
-    try {
-      await cleanupSessions();
-    } catch (error) {
-      console.error('[CRON] Session cleanup failed:', error);
-    }
-    try {
-      const removed = await deleteExpiredTickets();
-      if (removed > 0) {
-        log(
-          'info',
-          `[CRON] Removed ${removed} used/expired passkey ticket(s).`
-        );
-      }
-    } catch (error) {
-      console.error('[CRON] Passkey ticket cleanup failed:', error);
-    }
-  });
-};
 // Migrations and RLS policies are applied by index.ts before this module is
 // imported, so that Better Auth's eager schema validation (run at auth.ts
 // module scope) sees the migrated schema. Do not move them back in here.
@@ -793,10 +830,7 @@ const scheduleSessionCleanup = async () => {
       console.error('[AUTH] Post-init SSO sync failed:', err)
     );
   }
-  scheduleBackupsOnStartup();
-  await scheduleOpenFoodFactsAutoSyncOnStartup();
-  scheduleSessionCleanup();
-  startProviderSyncSchedulers();
+  await scheduleBackgroundJobs();
   if (process.env.SPARKY_FITNESS_ADMIN_EMAIL) {
     // A demo account promoted to admin would hand every anonymous visitor the
     // admin panel. Refuse the promotion rather than start up compromised.
@@ -814,7 +848,6 @@ const scheduleSessionCleanup = async () => {
   if (process.env.SPARKY_FITNESS_DEMO_MODE === 'true') {
     try {
       await seedDemoUser();
-      scheduleDemoMidnightReset();
     } catch (err) {
       log('error', '[DEMO] Demo mode initialization failed:', err);
     }

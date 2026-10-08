@@ -59,6 +59,9 @@ const FoodDatabaseManager = lazyWithChunkRecovery(
   () => import('./pages/Foods/Foods')
 );
 const Reports = lazyWithChunkRecovery(() => import('./pages/Reports/Reports'));
+const Symptoms = lazyWithChunkRecovery(
+  () => import('./pages/Symptoms/Symptoms')
+);
 const Medications = lazyWithChunkRecovery(
   () => import('./pages/Medications/Medications')
 );
@@ -412,6 +415,11 @@ const router = createBrowserRouter([
           {
             path: 'goals',
             Component: GoalsSettings,
+            ErrorBoundary: RouteErrorBoundary,
+          },
+          {
+            path: 'symptoms',
+            Component: Symptoms,
             ErrorBoundary: RouteErrorBoundary,
           },
           {

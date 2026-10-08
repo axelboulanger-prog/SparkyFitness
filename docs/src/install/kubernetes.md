@@ -20,3 +20,38 @@ helm install sparkyfitness ./SparkyFitness/helm/chart -f my-values.yaml
 ```
 
 For all configuration options (external database, ingress, OIDC, email, etc.) see the [Helm chart README](https://github.com/CodeWithCJ/SparkyFitness/blob/main/helm/README.md).
+
+## Flux
+
+Flux can install the chart straight from its OCI registry, with no Helm repository to add. Create the `sparkyfitness` namespace first, then apply:
+
+```yaml
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: sparkyfitness
+  namespace: sparkyfitness
+spec:
+  interval: 1h
+  url: oci://ghcr.io/codewithcj/charts/sparkyfitness
+  ref:
+    tag: 1.8.0 # the release to run; bump it to upgrade
+  # Pick the chart layer explicitly; the artifact can also carry a provenance layer.
+  layerSelector:
+    mediaType: application/vnd.cncf.helm.chart.content.v1.tar+gzip
+    operation: copy
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: sparkyfitness
+  namespace: sparkyfitness
+spec:
+  interval: 1h
+  chartRef:
+    kind: OCIRepository
+    name: sparkyfitness
+  values: {} # same values as helm install -f my-values.yaml
+```
+
+Flux renders the chart with cluster access, so chart-generated secrets stay the same across upgrades.

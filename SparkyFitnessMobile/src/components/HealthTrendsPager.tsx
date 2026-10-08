@@ -3,7 +3,10 @@ import { useTranslation } from 'react-i18next';
 import { StyleSheet, Text, View } from 'react-native';
 import PagerView from 'react-native-pager-view';
 import type { HealthTrendKey } from '../constants/healthTrends';
-import type { SleepTrendSeries } from '../hooks/useHealthTrends';
+import type {
+  CaloriesTrendSeries,
+  SleepTrendSeries,
+} from '../hooks/useHealthTrends';
 import type {
   StepsDataPoint,
   WeightDataPoint,
@@ -13,6 +16,7 @@ import type {
   HealthTrendSeries,
   HydrationDataPoint,
 } from '../types/healthTrends';
+import CaloriesBarChart from './CaloriesBarChart';
 import HydrationBarChart from './HydrationBarChart';
 import SleepTimelineChart from './SleepTimelineChart';
 import StepsBarChart from './StepsBarChart';
@@ -23,11 +27,20 @@ type HealthTrendsPagerProps = {
   weight: HealthTrendSeries<WeightDataPoint>;
   sleep: SleepTrendSeries;
   hydration: HealthTrendSeries<HydrationDataPoint>;
+  calories: CaloriesTrendSeries;
   range: HealthTrendDateRange;
   weightUnit: string;
   waterUnit: string;
+  /** The live target weight. `target_weight` has no per-day history anywhere in the
+   * schema (a single scalar profile field), so this stays a flat line across the whole
+   * window by necessity -- there is nothing to step between. */
   weightGoal?: number | null;
-  hydrationGoal?: number | null;
+  /** The resolved hydration goal for each day in the window, same order as
+   * `hydration.data`, stepping to a new value on the day it actually changed. */
+  hydrationGoals?: (number | null)[];
+  /** The resolved calorie goal for each day in the window, same order as
+   * `calories.data`, stepping to a new value on the day it actually changed. */
+  calorieGoals?: (number | null)[];
   visibleTrends: readonly HealthTrendKey[];
   activePage: number;
   onPageSelected: (page: number) => void;
@@ -53,11 +66,13 @@ const HealthTrendsPager: React.FC<HealthTrendsPagerProps> = ({
   weight,
   sleep,
   hydration,
+  calories,
   range,
   weightUnit,
   waterUnit,
   weightGoal,
-  hydrationGoal,
+  hydrationGoals,
+  calorieGoals,
   visibleTrends,
   activePage,
   onPageSelected,
@@ -80,8 +95,11 @@ const HealthTrendsPager: React.FC<HealthTrendsPagerProps> = ({
         {...hydration}
         range={range}
         unit={waterUnit}
-        goal={hydrationGoal}
+        goals={hydrationGoals}
       />
+    ),
+    calories: () => (
+      <CaloriesBarChart {...calories} range={range} goals={calorieGoals} />
     ),
   };
 
@@ -98,6 +116,11 @@ const HealthTrendsPager: React.FC<HealthTrendsPagerProps> = ({
       hydration.isLoading ||
       hydration.isError ||
       hydration.data.some((point) => point.milliliters > 0),
+    // Same reasoning as hydration: `useCaloriesRange` zero-fills every day too.
+    calories: () =>
+      calories.isLoading ||
+      calories.isError ||
+      calories.data.some((point) => point.calories > 0),
   };
 
   // A trend the user configured to show but that has no data for in this window still hides itself

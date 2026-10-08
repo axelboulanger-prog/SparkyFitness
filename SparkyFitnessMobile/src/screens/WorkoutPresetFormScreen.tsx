@@ -196,13 +196,13 @@ const PresetFormBody: React.FC<PresetFormBodyProps> = ({
                 onPress={() => setWorkoutFormat(fmt)}
                 className={`px-3 py-2 rounded-xl border ${
                   isSelected
-                    ? 'bg-primary/15 border-primary'
+                    ? 'bg-accent-primary/15 border-accent-primary'
                     : 'bg-surface border-border/50'
                 }`}
               >
                 <Text
                   className={`text-xs font-semibold ${
-                    isSelected ? 'text-primary' : 'text-text-secondary'
+                    isSelected ? 'text-accent-primary' : 'text-text-secondary'
                   }`}
                 >
                   {getFormatLabel(fmt, t)}

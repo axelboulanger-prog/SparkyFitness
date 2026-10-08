@@ -519,6 +519,10 @@ export const exerciseProgressResponseSchema = z.object({
   exercise_preset_entry_name: z.string().nullable().optional(),
   has_telemetry: z.boolean().nullable().optional(),
   category: z.string().nullable().optional(),
+  /** The entry's modality; `bodyweight_reps` sets add body weight to load. */
+  modality: exerciseModalitySchema.nullable().optional(),
+  /** The lifter's body weight that day (kg), null with no check-ins. */
+  body_weight_kg: z.number().nullable().optional(),
   sets: z.array(exerciseEntrySetRequestSchema),
 });
 

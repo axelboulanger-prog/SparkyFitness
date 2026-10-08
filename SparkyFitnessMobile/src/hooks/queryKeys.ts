@@ -101,6 +101,12 @@ export const mealTypesQueryKey = ['mealTypes'] as const;
 
 export const goalsQueryKey = (date: string) => ['goals', date] as const;
 
+export const goalsRangeQueryKey = (
+  startDate: string,
+  endDate: string,
+  adjust: boolean
+) => ['goalsRange', startDate, endDate, adjust] as const;
+
 export const foodVariantsQueryKey = (foodId: string) =>
   ['foodVariants', foodId] as const;
 
@@ -291,6 +297,9 @@ export const nutritionTrendsQueryKey = (startDate: string, endDate: string) =>
 export const exerciseDashboardQueryKey = (startDate: string, endDate: string) =>
   ['exerciseDashboard', startDate, endDate] as const;
 
+export const trainingConsistencyQueryKey = () =>
+  ['trainingConsistency'] as const;
+
 export const cardioSessionsQueryKey = (
   startDate: string,
   endDate: string,
@@ -324,6 +333,16 @@ export const pregnancyPhotosQueryKey = ['pregnancyPhotos'] as const;
 
 export const symptomEntriesQueryKey = (fromDate: string, toDate: string) =>
   ['symptomEntries', fromDate, toDate] as const;
+export const symptomEntriesRootQueryKey = ['symptomEntries'] as const;
+export const symptomEntriesDetailedQueryKey = (
+  fromDate: string,
+  toDate: string
+) => ['symptomEntries', 'detailed', fromDate, toDate] as const;
+export const symptomOngoingQueryKey = ['symptomOngoing'] as const;
+export const symptomDefinitionsQueryKey = ['symptomDefinitions'] as const;
+export const symptomOptionsQueryKey = ['symptomOptions'] as const;
+export const symptomFreeDaysQueryKey = (fromDate: string, toDate: string) =>
+  ['symptomFreeDays', fromDate, toDate] as const;
 
 // --- Medications ---
 export const medicationsRootQueryKey = ['medications'] as const;

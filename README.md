@@ -102,6 +102,7 @@ SparkyFitness can sync data from multiple health and fitness platforms:
 - **Norish**
 - **Yazio** (uses unofficial API)
 - **Swiss Food Database**
+- **Canadian Nutrient File (Health Canada)**
 - **Free Exercise DB** (Github)
 - **Wger**
 

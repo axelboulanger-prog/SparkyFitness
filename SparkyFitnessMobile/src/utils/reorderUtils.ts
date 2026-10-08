@@ -21,3 +21,34 @@ export function moveItem<T>(
     ...remaining.slice(insertIndex),
   ];
 }
+
+/**
+ * A saved order of keys, reconciled against the registry it was saved from.
+ *
+ * Keys the saved order does not know about (added to the registry after it was
+ * written) are appended in registry order, so registering a new key never needs
+ * a store migration. Keys that no longer exist, and duplicates from a corrupted
+ * write, are dropped.
+ */
+export function resolveKeyOrder<K extends string>(
+  savedOrder: readonly string[],
+  registry: readonly K[]
+): K[] {
+  const isKey = (value: string): value is K =>
+    (registry as readonly string[]).includes(value);
+  const resolvedOrder: K[] = [];
+  const seenKeys = new Set<K>();
+
+  for (const key of savedOrder) {
+    if (!isKey(key) || seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    resolvedOrder.push(key);
+  }
+
+  for (const key of registry) {
+    if (seenKeys.has(key)) continue;
+    resolvedOrder.push(key);
+  }
+
+  return resolvedOrder;
+}

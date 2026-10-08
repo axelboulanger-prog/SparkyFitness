@@ -6,6 +6,7 @@ import withingsDataProcessor from './withingsDataProcessor.js';
 import { logRawResponse } from '../../utils/diagnosticLogger.js';
 import { claimOAuthState, persistOAuthState } from '../../utils/oauthState.js';
 import { describeError } from '../../utils/errors.js';
+import { withProviderTokenLock } from '../../models/externalProviderRepository.js';
 import type {
   WithingsActivity,
   WithingsHeartSeries,
@@ -222,99 +223,102 @@ async function exchangeCodeForTokens(
 async function refreshAccessToken(userId: string) {
   const client = await getClient(userId);
   try {
-    const providerResult = await client.query(
-      `SELECT encrypted_app_id, app_id_iv, app_id_tag, encrypted_app_key, app_key_iv, app_key_tag,
+    return await withProviderTokenLock(client, async () => {
+      const providerResult = await client.query(
+        `SELECT encrypted_app_id, app_id_iv, app_id_tag, encrypted_app_key, app_key_iv, app_key_tag,
                     encrypted_refresh_token, refresh_token_iv, refresh_token_tag
              FROM external_data_providers
-             WHERE user_id = $1 AND provider_type = 'withings'`,
-      [userId]
-    );
-    if (providerResult.rows.length === 0) {
-      throw new Error(
-        'Withings client credentials or refresh token not found for user.'
+             WHERE user_id = $1 AND provider_type = 'withings'
+             FOR UPDATE`,
+        [userId]
       );
-    }
-    const {
-      encrypted_app_id,
-      app_id_iv,
-      app_id_tag,
-      encrypted_app_key,
-      app_key_iv,
-      app_key_tag,
-      encrypted_refresh_token,
-      refresh_token_iv,
-      refresh_token_tag,
-    } = providerResult.rows[0];
-    const clientId = await decrypt(
-      encrypted_app_id,
-      app_id_iv,
-      app_id_tag,
-      ENCRYPTION_KEY
-    );
-    const clientSecret = await decrypt(
-      encrypted_app_key,
-      app_key_iv,
-      app_key_tag,
-      ENCRYPTION_KEY
-    );
-    const refreshToken = await decrypt(
-      encrypted_refresh_token,
-      refresh_token_iv,
-      refresh_token_tag,
-      ENCRYPTION_KEY
-    );
-    if (!clientId || !clientSecret || !refreshToken) {
-      throw new Error(
-        'Withings client ID, client secret, or refresh token is missing.'
+      if (providerResult.rows.length === 0) {
+        throw new Error(
+          'Withings client credentials or refresh token not found for user.'
+        );
+      }
+      const {
+        encrypted_app_id,
+        app_id_iv,
+        app_id_tag,
+        encrypted_app_key,
+        app_key_iv,
+        app_key_tag,
+        encrypted_refresh_token,
+        refresh_token_iv,
+        refresh_token_tag,
+      } = providerResult.rows[0];
+      const clientId = await decrypt(
+        encrypted_app_id,
+        app_id_iv,
+        app_id_tag,
+        ENCRYPTION_KEY
       );
-    }
-    const response = await requestWithingsToken({
-      grant_type: 'refresh_token',
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-    });
-    const {
-      access_token,
-      refresh_token: newRefreshToken,
-      expires_in,
-      scope,
-    } = parseWithingsTokenResponse(response.data, 'token refresh');
-    // Validate expires_in
-    let validExpiresIn = parseInt(String(expires_in), 10);
-    if (isNaN(validExpiresIn) || validExpiresIn <= 0) {
-      log(
-        'warn',
-        `Invalid or missing expires_in value received from Withings API during refresh: ${expires_in}. Defaulting to 0.`
+      const clientSecret = await decrypt(
+        encrypted_app_key,
+        app_key_iv,
+        app_key_tag,
+        ENCRYPTION_KEY
       );
-      validExpiresIn = 0; // Force immediate expiration to trigger refresh
-    }
-    // Encrypt new tokens
-    const encryptedAccessToken = await encrypt(access_token, ENCRYPTION_KEY);
-    const encryptedNewRefreshToken = await encrypt(
-      newRefreshToken,
-      ENCRYPTION_KEY
-    );
-    // Update tokens in external_data_providers table
-    await client.query(
-      `UPDATE external_data_providers
+      const refreshToken = await decrypt(
+        encrypted_refresh_token,
+        refresh_token_iv,
+        refresh_token_tag,
+        ENCRYPTION_KEY
+      );
+      if (!clientId || !clientSecret || !refreshToken) {
+        throw new Error(
+          'Withings client ID, client secret, or refresh token is missing.'
+        );
+      }
+      const response = await requestWithingsToken({
+        grant_type: 'refresh_token',
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+      });
+      const {
+        access_token,
+        refresh_token: newRefreshToken,
+        expires_in,
+        scope,
+      } = parseWithingsTokenResponse(response.data, 'token refresh');
+      // Validate expires_in
+      let validExpiresIn = parseInt(String(expires_in), 10);
+      if (isNaN(validExpiresIn) || validExpiresIn <= 0) {
+        log(
+          'warn',
+          `Invalid or missing expires_in value received from Withings API during refresh: ${expires_in}. Defaulting to 0.`
+        );
+        validExpiresIn = 0; // Force immediate expiration to trigger refresh
+      }
+      // Encrypt new tokens
+      const encryptedAccessToken = await encrypt(access_token, ENCRYPTION_KEY);
+      const encryptedNewRefreshToken = await encrypt(
+        newRefreshToken,
+        ENCRYPTION_KEY
+      );
+      // Update tokens in external_data_providers table
+      await client.query(
+        `UPDATE external_data_providers
              SET encrypted_access_token = $1, access_token_iv = $2, access_token_tag = $3,
                  encrypted_refresh_token = $4, refresh_token_iv = $5, refresh_token_tag = $6,
                  scope = $7, token_expires_at = $8, updated_at = NOW()
              WHERE user_id = $9 AND provider_type = 'withings'`,
-      [
-        encryptedAccessToken.encryptedText,
-        encryptedAccessToken.iv,
-        encryptedAccessToken.tag,
-        encryptedNewRefreshToken.encryptedText,
-        encryptedNewRefreshToken.iv,
-        encryptedNewRefreshToken.tag,
-        scope,
-        new Date(Date.now() + validExpiresIn * 1000),
-        userId,
-      ]
-    );
-    return access_token;
+        [
+          encryptedAccessToken.encryptedText,
+          encryptedAccessToken.iv,
+          encryptedAccessToken.tag,
+          encryptedNewRefreshToken.encryptedText,
+          encryptedNewRefreshToken.iv,
+          encryptedNewRefreshToken.tag,
+          scope,
+          new Date(Date.now() + validExpiresIn * 1000),
+          userId,
+        ]
+      );
+      return access_token;
+    });
   } catch (error) {
     log(
       'error',

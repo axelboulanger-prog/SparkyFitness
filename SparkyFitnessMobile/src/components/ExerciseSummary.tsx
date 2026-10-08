@@ -12,6 +12,10 @@ import type {
   WorkoutPlanTemplate,
 } from '../types/workoutPlans';
 import BottomSheetPicker from './BottomSheetPicker';
+import {
+  getLoggedAssignmentIds,
+  getUncompletedActivePlans,
+} from '../utils/workoutPlanSchedule';
 
 interface ExerciseSummaryProps {
   exerciseEntries: ExerciseSessionResponse[];
@@ -49,42 +53,14 @@ const ExerciseSummary: React.FC<ExerciseSummaryProps> = ({
     Record<string, string>
   >({});
 
-  const loggedAssignmentIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const session of exerciseEntries) {
-      if (
-        'workout_plan_assignment_id' in session &&
-        session.workout_plan_assignment_id != null
-      ) {
-        ids.add(String(session.workout_plan_assignment_id));
-      }
-      if ('exercises' in session && Array.isArray(session.exercises)) {
-        for (const ex of session.exercises) {
-          if (
-            ex &&
-            'workout_plan_assignment_id' in ex &&
-            ex.workout_plan_assignment_id != null
-          ) {
-            ids.add(String(ex.workout_plan_assignment_id));
-          }
-        }
-      }
-    }
-    return ids;
-  }, [exerciseEntries]);
-
-  const uncompletedActivePlans = useMemo(() => {
-    return (activePlans || []).filter((plan) => {
-      if (!plan.next_assignment) return false;
-      const planAssignmentIds = (plan.assignments || []).map((a) =>
-        String(a.id)
-      );
-      const isPlanCompletedToday = planAssignmentIds.some((id) =>
-        loggedAssignmentIds.has(id)
-      );
-      return !isPlanCompletedToday;
-    });
-  }, [activePlans, loggedAssignmentIds]);
+  const uncompletedActivePlans = useMemo(
+    () =>
+      getUncompletedActivePlans(
+        activePlans || [],
+        getLoggedAssignmentIds(exerciseEntries)
+      ),
+    [activePlans, exerciseEntries]
+  );
 
   const getDistinctSessionsForPlan = (
     plan: WorkoutPlanTemplate

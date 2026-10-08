@@ -6,6 +6,10 @@ import { log } from '../config/logging.js';
 import requireSelfActor from '../middleware/requireSelfMiddleware.js';
 import authMiddleware from '../middleware/authMiddleware.js';
 import checkPermissionMiddleware from '../middleware/checkPermissionMiddleware.js';
+import {
+  SYNC_ALREADY_RUNNING_RESPONSE,
+  startProviderSync,
+} from '../services/providerSyncClaim.js';
 const router = express.Router();
 /**
  * @swagger
@@ -115,14 +119,23 @@ router.post(
         'info',
         `[fitbitRoutes] Manual sync triggered for user ${userId}${startDate ? ` from ${startDate}` : ''}${endDate ? ` to ${endDate}` : ''}${dataSource ? ` (Source: ${dataSource})` : ''}`
       );
-      await fitbitService.syncFitbitData(
-        userId,
-        'manual',
-        startDate,
-        endDate,
-        dataSource,
-        saveMockData
+      const started = await startProviderSync(
+        { userId, providerType: 'fitbit' },
+        () =>
+          fitbitService.syncFitbitData(
+            userId,
+            'manual',
+            startDate,
+            endDate,
+            dataSource,
+            saveMockData
+          )
       );
+      if (!started) {
+        res.status(409).json(SYNC_ALREADY_RUNNING_RESPONSE);
+        return;
+      }
+      await started.running;
       res
         .status(200)
         .json({ message: 'Fitbit data sync completed successfully.' });

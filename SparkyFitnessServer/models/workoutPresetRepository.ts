@@ -2,10 +2,24 @@ import { getClient } from '../db/poolManager.js';
 import { log } from '../config/logging.js';
 // @ts-expect-error TS(7016): Could not find a declaration file for module 'pg-format'
 import format from 'pg-format';
+import type { PoolClient } from 'pg';
+import { assertSetWeightSign } from '../utils/setWeightSign.js';
 import {
   buildSqlSearch,
   buildSqlExactMatchOrder,
 } from '../utils/dbSearchHelper.js';
+
+async function assertPresetExerciseSetWeights(
+  client: PoolClient,
+  exerciseId: string,
+  sets: readonly { weight?: number | string | null }[] | null | undefined
+) {
+  const result = await client.query(
+    'SELECT modality FROM exercises WHERE id = $1',
+    [exerciseId]
+  );
+  assertSetWeightSign(sets, result.rows[0]?.modality ?? null);
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function createWorkoutPreset(presetData: any) {
@@ -58,6 +72,11 @@ async function createWorkoutPreset(presetData: any) {
         );
         const newExerciseId = exerciseResult.rows[0].id;
         if (exercise.sets && exercise.sets.length > 0) {
+          await assertPresetExerciseSetWeights(
+            client,
+            exercise.exercise_id,
+            exercise.sets
+          );
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const setsValues = exercise.sets.map((set: any) => [
             newExerciseId,
@@ -343,6 +362,11 @@ async function updateWorkoutPreset(
           );
           const newExerciseId = exerciseResult.rows[0].id;
           if (exercise.sets && exercise.sets.length > 0) {
+            await assertPresetExerciseSetWeights(
+              client,
+              exercise.exercise_id,
+              exercise.sets
+            );
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const setsValues = exercise.sets.map((set: any) => [
               newExerciseId,
@@ -483,6 +507,7 @@ async function addExerciseToWorkoutPreset(
     }
 
     if (sets && sets.length > 0) {
+      await assertPresetExerciseSetWeights(client, exerciseId, sets);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const setsValues = sets.map((set: any) => [
         exercisePresetId,

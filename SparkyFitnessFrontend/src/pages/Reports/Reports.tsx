@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FastingReport } from '@/pages/Reports/FastingReport';
 import MedicationReports from '@/pages/Reports/MedicationReports';
+import SymptomsReport from '@/pages/Symptoms/SymptomsReport';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import { useActiveUser } from '@/contexts/ActiveUserContext';
 import ZoomableChart from '@/components/ZoomableChart';
@@ -403,6 +404,12 @@ const Reports = () => {
               injections={injections}
               titrationSteps={titrationSteps}
             />
+          </ChartErrorBoundary>
+        );
+      case 'symptoms-reports':
+        return (
+          <ChartErrorBoundary>
+            <SymptomsReport startDate={startDate} endDate={endDate} />
           </ChartErrorBoundary>
         );
       default:

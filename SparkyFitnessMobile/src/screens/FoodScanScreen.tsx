@@ -38,8 +38,16 @@ import { selectDisplayVariant } from '../utils/foodDetails';
 import { getApiErrorMessage } from '../services/api/errors';
 import { TimeoutError } from '../utils/concurrency';
 import { fireSuccessHaptic } from '../services/haptics';
+import {
+  isOnDeviceLabelScanAvailable,
+  scanLabelOnDevice,
+} from '../services/onDeviceLabelScan';
+import {
+  rememberLabelScan,
+  type LabelScanSource,
+} from '../services/labelScanSession';
+import { labelScanToInitialFood } from '../utils/labelScanFood';
 import { useAppPreferencesStore } from '../stores/appPreferencesStore';
-import { toFormString } from '../types/foodInfo';
 import { useActiveAiServiceSetting } from '../hooks/useActiveAiServiceSetting';
 import { isFoodPhotoAvailable } from '../services/api/aiSettingsApi';
 import {
@@ -537,39 +545,37 @@ const FoodScanScreen: React.FC<FoodScanScreenProps> = ({
     if (!capturedPhoto) return;
     setLabelProcessing(true);
     try {
-      const result = await scanNutritionLabel(
-        capturedPhoto.base64,
-        'image/jpeg'
-      );
+      const onDeviceResult = await scanLabelOnDevice(capturedPhoto.base64);
+      const result =
+        onDeviceResult ??
+        (await scanNutritionLabel(capturedPhoto.base64, 'image/jpeg'));
+      const source: LabelScanSource = onDeviceResult ? 'device' : 'server';
+      rememberLabelScan(capturedPhoto.base64, source);
+      // The toast survives the navigation below, so it shows on the form. The
+      // server reading is only news when the on-device scan was tried first;
+      // otherwise it is the normal path and the form's banner says enough.
+      const triedOnDevice =
+        useAppPreferencesStore.getState().onDeviceLabelScanEnabled &&
+        isOnDeviceLabelScanAvailable();
+      if (onDeviceResult || triedOnDevice) {
+        Toast.show({
+          type: 'info',
+          text1: onDeviceResult
+            ? t('foodScan.labelReadOnDevice', {
+                defaultValue: 'Label read on this iPhone',
+              })
+            : t('foodScan.labelReadByServer', {
+                defaultValue: 'Label read by the server AI',
+              }),
+        });
+      }
       navigation.replace(
         'FoodForm',
         buildFoodFormParams({
-          initialFood: {
-            name: result.name || '',
-            brand: result.brand || '',
-            servingSize: String(result.serving_size ?? ''),
-            servingUnit: result.serving_unit || 'g',
-            calories: String(result.calories ?? ''),
-            protein: String(result.protein ?? ''),
-            carbs: String(result.carbs ?? ''),
-            fat: String(result.fat ?? ''),
-            fiber: toFormString(result.fiber),
-            saturatedFat: toFormString(result.saturated_fat),
-            transFat: toFormString(result.trans_fat),
-            sodium: toFormString(result.sodium),
-            sugars: toFormString(result.sugars),
-            cholesterol: toFormString(result.cholesterol),
-            potassium: toFormString(result.potassium),
-            calcium: toFormString(result.calcium),
-            iron: toFormString(result.iron),
-            caffeineMg: toFormString(result.caffeine_mg),
-            waterMl: toFormString(result.water_ml),
-            alcoholG: toFormString(result.alcohol_g),
-            vitaminA: toFormString(result.vitamin_a),
-            vitaminC: toFormString(result.vitamin_c),
-          },
+          initialFood: labelScanToInitialFood(result),
           barcode: lookupError?.barcode ?? notFoundBarcode ?? undefined,
           providerType: 'label_scan',
+          labelScanSource: source,
         })
       );
     } catch {

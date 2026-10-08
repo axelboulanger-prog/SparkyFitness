@@ -7,6 +7,11 @@ import requireSelfActor from '../middleware/requireSelfMiddleware.js';
 import { OAuthStateError } from '../utils/oauthState.js';
 import authMiddleware from '../middleware/authMiddleware.js';
 import checkPermissionMiddleware from '../middleware/checkPermissionMiddleware.js';
+import {
+  SYNC_ALREADY_RUNNING_RESPONSE,
+  syncClaimTarget,
+  startProviderSync,
+} from '../services/providerSyncClaim.js';
 const router = express.Router();
 /**
  * @swagger
@@ -199,15 +204,24 @@ router.post(
         'info',
         `[polarRoutes] Manual sync triggered for user ${userId}${startDate ? ` from ${startDate}` : ''}${endDate ? ` to ${endDate}` : ''}${dataSource ? ` (Source: ${dataSource})` : ''}`
       );
-      await polarService.syncPolarData(
-        userId,
-        'manual',
-        providerId,
-        startDate,
-        endDate,
-        dataSource,
-        saveMockData
+      const started = await startProviderSync(
+        syncClaimTarget(userId, 'polar', providerId),
+        () =>
+          polarService.syncPolarData(
+            userId,
+            'manual',
+            providerId,
+            startDate,
+            endDate,
+            dataSource,
+            saveMockData
+          )
       );
+      if (!started) {
+        res.status(409).json(SYNC_ALREADY_RUNNING_RESPONSE);
+        return;
+      }
+      await started.running;
       res
         .status(200)
         .json({ message: 'Polar data sync completed successfully.' });

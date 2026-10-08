@@ -22,6 +22,9 @@ const MedicationReminderReconciler: React.FC = () => {
   const medicationReminderHideNames = useAppPreferencesStore(
     (s) => s.medicationReminderHideNames
   );
+  const medicationReminderConsolidate = useAppPreferencesStore(
+    (s) => s.medicationReminderConsolidate
+  );
   const remindersActive = medicationRemindersEnabled && notificationsEnabled;
   const [languageRevision, setLanguageRevision] = useState(0);
 
@@ -64,6 +67,7 @@ const MedicationReminderReconciler: React.FC = () => {
     remindersActive,
     medicationReminderRepeats,
     medicationReminderHideNames,
+    medicationReminderConsolidate,
     today,
     languageRevision,
   ]);

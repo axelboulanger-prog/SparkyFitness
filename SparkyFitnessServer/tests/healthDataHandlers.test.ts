@@ -11,12 +11,14 @@ import {
 import measurementRepository from '../models/measurementRepository.js';
 import waterContainerRepository from '../models/waterContainerRepository.js';
 import * as genericHealthRepository from '../models/genericHealthRepository.js';
+import * as mindfulnessRepository from '../models/mindfulnessRepository.js';
 import type { WaterContainerResponse } from '@workspace/shared';
 
 vi.mock('../models/measurementRepository.js', () => ({
   default: {
     upsertWaterIntakeSamples: vi.fn(),
     bulkUpsertCheckInMeasurements: vi.fn(),
+    getCheckInMeasurementsByDateRange: vi.fn(),
   },
 }));
 vi.mock('../models/waterContainerRepository.js', () => ({
@@ -26,6 +28,9 @@ vi.mock('../models/waterContainerRepository.js', () => ({
 }));
 vi.mock('../models/genericHealthRepository.js', () => ({
   upsertDailyHealthMetrics: vi.fn(),
+}));
+vi.mock('../models/mindfulnessRepository.js', () => ({
+  createMindfulnessSession: vi.fn(),
 }));
 
 // Guards the registry against alias drift: every case label from the old
@@ -65,10 +70,18 @@ describe('health data handler registry', () => {
     ['bone_mass', 'bone_mass_kg'],
     ['BoneMass', 'bone_mass_kg'],
     ['body_water_percentage', 'body_water_percentage'],
+    // Health Connect body water is a mass, converted to a percentage.
+    ['body_water_mass', 'body_water_mass'],
+    ['BodyWaterMass', 'body_water_mass'],
     ['bmr', 'bmr'],
     ['basal_metabolic_rate', 'bmr'],
     ['BasalMetabolicRate', 'bmr'],
     ['resting_energy', 'bmr'],
+    ['MindfulnessSession', 'MindfulnessSession'],
+    ['MindfulSession', 'MindfulnessSession'],
+    ['mindfulness_session', 'MindfulnessSession'],
+    ['mindfulness', 'MindfulnessSession'],
+    ['mindful', 'MindfulnessSession'],
   ])("resolves '%s' to the '%s' handler", (rawType, canonicalKey) => {
     expect(resolveHandler(rawType)).toBe(HEALTH_TYPE_HANDLERS[canonicalKey]);
   });
@@ -456,5 +469,228 @@ describe('bmrHandler.handleBatch', () => {
 
     expect(outcomes[0].status).not.toBe('error');
     expect(outcomes[1].status).not.toBe('error');
+  });
+});
+
+describe('bodyWaterMassHandler.handleBatch', () => {
+  const bodyWaterMassHandler = HEALTH_TYPE_HANDLERS['body_water_mass'];
+  const ctx = {
+    userId: 'user-1',
+    actingUserId: 'actor-1',
+  } as unknown as HealthBatchContext;
+
+  const prepared = (
+    entry: Record<string, unknown>,
+    parsedDate = '2026-08-03'
+  ): PreparedHealthEntry => ({
+    entry,
+    parsedDate,
+    entryTimestamp: `${parsedDate}T12:00:00.000Z`,
+    entryHour: 12,
+  });
+
+  const writtenRows = () =>
+    vi.mocked(measurementRepository.bulkUpsertCheckInMeasurements).mock
+      .calls[0][2];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(
+      measurementRepository.bulkUpsertCheckInMeasurements
+    ).mockResolvedValue([{ id: 'row-1' }, { id: 'row-2' }] as never);
+    vi.mocked(
+      measurementRepository.getCheckInMeasurementsByDateRange
+    ).mockResolvedValue([] as never);
+  });
+
+  it('converts kg to a percentage using a weight from the same batch', async () => {
+    const outcomes = await bodyWaterMassHandler.handleBatch!(
+      [
+        prepared({ type: 'BodyWaterMass', value: 45 }),
+        prepared({ type: 'weight', value: 80 }),
+      ],
+      ctx
+    );
+
+    expect(outcomes.map((o) => o.status)).toEqual(['success', 'success']);
+    expect(writtenRows()).toEqual([
+      {
+        entryDate: '2026-08-03',
+        measurements: { body_water_percentage: 56.25 },
+      },
+      { entryDate: '2026-08-03', measurements: { weight: 80 } },
+    ]);
+    expect(
+      measurementRepository.getCheckInMeasurementsByDateRange
+    ).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the stored weight of the same day', async () => {
+    vi.mocked(
+      measurementRepository.getCheckInMeasurementsByDateRange
+    ).mockResolvedValue([
+      { entry_date: '2026-08-04', weight: '79.00' },
+      { entry_date: '2026-08-03', weight: '80.00' },
+    ] as never);
+
+    const outcomes = await bodyWaterMassHandler.handleBatch!(
+      [prepared({ type: 'BodyWaterMass', value: 44 })],
+      ctx
+    );
+
+    expect(outcomes[0].status).toBe('success');
+    expect(
+      measurementRepository.getCheckInMeasurementsByDateRange
+    ).toHaveBeenCalledWith('user-1', '2026-08-03', '2026-08-03');
+    expect(writtenRows()).toEqual([
+      { entryDate: '2026-08-03', measurements: { body_water_percentage: 55 } },
+    ]);
+  });
+
+  it('skips the record when there is no weight on that day', async () => {
+    vi.mocked(
+      measurementRepository.getCheckInMeasurementsByDateRange
+    ).mockResolvedValue([{ entry_date: '2026-08-03', weight: null }] as never);
+
+    const outcomes = await bodyWaterMassHandler.handleBatch!(
+      [
+        prepared({ type: 'BodyWaterMass', value: 44 }),
+        // A weight on another day must not be used.
+        prepared({ type: 'weight', value: 80 }, '2026-08-02'),
+      ],
+      ctx
+    );
+
+    expect(outcomes[0].status).toBe('skipped');
+    expect(outcomes[1].status).toBe('success');
+    expect(writtenRows()).toEqual([
+      { entryDate: '2026-08-02', measurements: { weight: 80 } },
+    ]);
+  });
+
+  it('rejects non-positive values and masses above the weight', async () => {
+    const outcomes = await bodyWaterMassHandler.handleBatch!(
+      [
+        prepared({ type: 'BodyWaterMass', value: 0 }),
+        prepared({ type: 'BodyWaterMass', value: 'abc' }),
+        prepared({ type: 'BodyWaterMass', value: 90 }),
+        prepared({ type: 'weight', value: 80 }),
+      ],
+      ctx
+    );
+
+    expect(outcomes.map((o) => o.status)).toEqual([
+      'error',
+      'error',
+      'error',
+      'success',
+    ]);
+  });
+
+  it('reports an error instead of skipping when the weight lookup fails', async () => {
+    vi.mocked(
+      measurementRepository.getCheckInMeasurementsByDateRange
+    ).mockRejectedValue(new Error('connection lost'));
+
+    const outcomes = await bodyWaterMassHandler.handleBatch!(
+      [prepared({ type: 'BodyWaterMass', value: 44 })],
+      ctx
+    );
+
+    expect(outcomes[0]).toEqual({
+      status: 'error',
+      error: 'Failed to process entry: connection lost',
+    });
+  });
+});
+
+describe('mindfulnessHandler', () => {
+  const handler = HEALTH_TYPE_HANDLERS.MindfulnessSession;
+  const ctx = {
+    userId: 'user-123',
+    actingUserId: 'acting-456',
+    parsedDate: '2026-10-05',
+    entryTimestamp: '2026-10-05T10:00:00.000Z',
+    entryHour: 10,
+    resolveCategory: vi.fn(),
+  } as unknown as HealthEntryContext;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('successfully creates a mindfulness session with valid duration and telemetry', async () => {
+    vi.mocked(mindfulnessRepository.createMindfulnessSession).mockResolvedValue(
+      {
+        id: 'session-1',
+        user_id: 'user-123',
+        entry_date: '2026-10-05',
+        start_time: '2026-10-05T10:00:00.000Z',
+        end_time: '2026-10-05T10:15:00.000Z',
+        duration_seconds: 900,
+        session_type: 'meditation',
+        provider: 'apple_health',
+        external_id: 'ext-abc',
+        heart_rate_avg: 68,
+        heart_rate_start: 78,
+        heart_rate_end: 62,
+        hrv_rmssd: 55,
+        stress_level_start: null,
+        stress_level_end: null,
+        mood_entry_id: null,
+        notes: 'Morning breathwork',
+        created_at: '2026-10-05T10:15:00.000Z',
+        updated_at: '2026-10-05T10:15:00.000Z',
+      }
+    );
+
+    const result = await handler.handle(
+      {
+        type: 'MindfulnessSession',
+        duration_seconds: 900,
+        startTime: '2026-10-05T10:00:00.000Z',
+        endTime: '2026-10-05T10:15:00.000Z',
+        source: 'apple_health',
+        source_id: 'ext-abc',
+        session_type: 'meditation',
+        heart_rate_avg: 68,
+        heart_rate_start: 78,
+        heart_rate_end: 62,
+        hrv_rmssd: 55,
+        notes: 'Morning breathwork',
+      },
+      ctx
+    );
+
+    expect(result.status).toBe('success');
+    expect(mindfulnessRepository.createMindfulnessSession).toHaveBeenCalledWith(
+      'user-123',
+      expect.objectContaining({
+        duration_seconds: 900,
+        session_type: 'meditation',
+        provider: 'apple_health',
+        external_id: 'ext-abc',
+        heart_rate_avg: 68,
+        heart_rate_start: 78,
+        heart_rate_end: 62,
+        hrv_rmssd: 55,
+      }),
+      'acting-456'
+    );
+  });
+
+  it('rejects entries with non-positive duration', async () => {
+    const result = await handler.handle(
+      {
+        type: 'MindfulnessSession',
+        duration_seconds: 0,
+      },
+      ctx
+    );
+
+    expect(result.status).toBe('error');
+    if (result.status === 'error') {
+      expect(result.error).toContain('Invalid duration');
+    }
   });
 });

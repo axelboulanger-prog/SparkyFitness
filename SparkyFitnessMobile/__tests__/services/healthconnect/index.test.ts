@@ -1737,6 +1737,40 @@ describe('enrichExerciseSessions', () => {
     ).toEqual({ inKilocalories: 120 });
   });
 
+  test('ignores an implausible synthesized basal aggregate (issue #2382: 66-min Samsung table tennis)', async () => {
+    mockAggregateRecord.mockImplementation(
+      ({ recordType }: { recordType: string }) => {
+        if (recordType === 'TotalCaloriesBurned') {
+          return Promise.resolve({
+            ENERGY_TOTAL: { inKilocalories: 606 },
+            dataOrigins: ['com.sec.android.app.shealth'],
+          });
+        }
+        if (recordType === 'BasalMetabolicRate') {
+          return Promise.resolve({
+            BASAL_CALORIES_TOTAL: { inKilocalories: 512.2 },
+          });
+        }
+        return Promise.resolve({ dataOrigins: [] });
+      }
+    );
+
+    const result = await enrichExerciseSessions(
+      [
+        makeSession({
+          startTime: '2026-09-19T10:04:00Z',
+          endTime: '2026-09-19T11:10:27Z',
+          metadata: { dataOrigin: 'com.sec.android.app.shealth' },
+        }),
+      ],
+      createTelemetryRunContext()
+    );
+
+    expect(
+      (result[0] as { energy: { inKilocalories: number } }).energy
+    ).toEqual({ inKilocalories: 606 });
+  });
+
   test('uses total calories as active energy when the basal aggregate is zero', async () => {
     mockAggregateRecord.mockImplementation(
       ({ recordType }: { recordType: string }) => {

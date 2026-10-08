@@ -38,6 +38,15 @@ vi.mock('../integrations/liftosaur/liftosaurService.js', () => ({
   }),
 }));
 
+vi.mock('../services/providerSyncClaim.js', async (importActual) => ({
+  ...(await importActual<typeof import('../services/providerSyncClaim.js')>()),
+  startProviderSync: vi.fn(async (_target, sync) => ({ running: sync() })),
+}));
+import {
+  SYNC_ALREADY_RUNNING_RESPONSE,
+  startProviderSync,
+} from '../services/providerSyncClaim.js';
+
 describe('liftosaurRoutes', () => {
   let app: express.Express;
 
@@ -49,6 +58,25 @@ describe('liftosaurRoutes', () => {
   });
 
   describe('POST /integrations/liftosaur/sync', () => {
+    it('answers 409 without syncing while another sync holds the account', async () => {
+      vi.mocked(startProviderSync).mockResolvedValueOnce(null);
+
+      const res = await request(app)
+        .post('/integrations/liftosaur/sync')
+        .send({ providerId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toEqual(SYNC_ALREADY_RUNNING_RESPONSE);
+      expect(startProviderSync).toHaveBeenCalledWith(
+        {
+          userId: '11111111-1111-1111-1111-111111111111',
+          providerId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+        },
+        expect.any(Function)
+      );
+      expect(liftosaurService.syncLiftosaurData).not.toHaveBeenCalled();
+    });
+
     it('returns 200 with valid body parameters', async () => {
       vi.mocked(liftosaurService.syncLiftosaurData).mockResolvedValue({
         success: true,

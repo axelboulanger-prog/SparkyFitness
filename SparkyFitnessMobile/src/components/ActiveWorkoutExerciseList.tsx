@@ -24,6 +24,8 @@ interface ActiveWorkoutExerciseListProps {
   prSetIds: PrSetMap;
   sessionId: string | null;
   verifiedSourcePresetId: number | undefined;
+  /** False until `verifiedSourcePresetId` is final; see the card's prop. */
+  historyScopeSettled: boolean;
   activeSetId: string | null;
   focusedSetKey: string | null;
   setRenderKeys: Record<string, string>;
@@ -67,6 +69,7 @@ function ActiveWorkoutExerciseList({
   prSetIds,
   sessionId,
   verifiedSourcePresetId,
+  historyScopeSettled,
   activeSetId,
   focusedSetKey,
   setRenderKeys,
@@ -110,6 +113,7 @@ function ActiveWorkoutExerciseList({
             prSetIds={prSetIds}
             excludePresetEntryId={sessionId ?? undefined}
             sourcePresetId={verifiedSourcePresetId}
+            historyScopeSettled={historyScopeSettled}
             activeSetId={activeSetId}
             focusedSetKey={focusedSetKey}
             setRenderKeys={setRenderKeys}

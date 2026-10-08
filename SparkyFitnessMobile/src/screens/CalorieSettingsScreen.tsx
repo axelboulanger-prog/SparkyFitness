@@ -280,6 +280,7 @@ const CalorieSettingsScreen: React.FC<CalorieSettingsScreenProps> = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['dailySummary'] });
+      queryClient.invalidateQueries({ queryKey: ['goalsRange'] });
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: preferencesQueryKey });

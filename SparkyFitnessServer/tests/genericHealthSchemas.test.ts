@@ -367,6 +367,7 @@ describe('Generic Health & Workout Zod Schemas', () => {
       body_battery_drained: 60,
       body_battery_highest: 95,
       body_battery_lowest: 35,
+      total_mindful_minutes: 25,
       created_at: new Date(),
       updated_at: new Date(),
     };
@@ -378,5 +379,6 @@ describe('Generic Health & Workout Zod Schemas', () => {
     );
     expect(parsed.body_battery_highest).toBe(95);
     expect(parsed.acwr_ratio).toBe(1.09);
+    expect(parsed.total_mindful_minutes).toBe(25);
   });
 });

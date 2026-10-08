@@ -9,9 +9,12 @@ import hevyService from '../integrations/hevy/hevyService.js';
 import {
   PROVIDER_SYNC_CONFIGS,
   runProviderSync,
+  scheduleProviderSync,
   startProviderSyncSchedulers,
   type ProviderSyncConfig,
 } from '../services/providerSyncScheduler.js';
+import { startProviderSync } from '../services/providerSyncClaim.js';
+import { log } from '../config/logging.js';
 
 vi.mock('node-cron', () => ({
   default: {
@@ -60,9 +63,16 @@ vi.mock('../config/logging.js', () => ({
   log: vi.fn(),
 }));
 
+vi.mock('../services/providerSyncClaim.js', () => ({
+  startProviderSync: vi.fn(),
+}));
+
 describe('providerSyncScheduler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(startProviderSync).mockImplementation(async (_target, sync) => ({
+      running: sync(),
+    }));
   });
 
   it('contains configurations for all 10 providers', () => {
@@ -184,6 +194,47 @@ describe('providerSyncScheduler', () => {
     ).toHaveBeenCalledWith('p-ok', expect.any(Date));
   });
 
+  it('claims each provider row and skips one another sync is running on', async () => {
+    vi.mocked(externalProviderRepository.getProvidersByType).mockResolvedValue([
+      {
+        id: 'p-busy',
+        user_id: 'u-busy',
+        is_active: true,
+        sync_frequency: 'hourly',
+      } as never,
+      {
+        id: 'p-free',
+        user_id: 'u-free',
+        is_active: true,
+        sync_frequency: 'hourly',
+      } as never,
+    ]);
+    vi.mocked(startProviderSync).mockImplementation(async (target, sync) =>
+      'providerId' in target && target.providerId === 'p-busy'
+        ? null
+        : { running: sync() }
+    );
+    const fitbitConfig = PROVIDER_SYNC_CONFIGS.find(
+      (c) => c.name === 'Fitbit'
+    ) as ProviderSyncConfig;
+
+    await runProviderSync(fitbitConfig);
+
+    expect(startProviderSync).toHaveBeenCalledWith(
+      { userId: 'u-busy', providerId: 'p-busy' },
+      expect.any(Function)
+    );
+    expect(fitbitService.syncFitbitData).toHaveBeenCalledOnce();
+    expect(fitbitService.syncFitbitData).toHaveBeenCalledWith(
+      'u-free',
+      'scheduled'
+    );
+    expect(log).toHaveBeenCalledWith(
+      'info',
+      expect.stringContaining('Fitbit sync skipped for user u-busy')
+    );
+  });
+
   it('does not update last_sync_at when Garmin has failed phases', async () => {
     vi.mocked(externalProviderRepository.getProvidersByType).mockResolvedValue([
       {
@@ -245,7 +296,31 @@ describe('providerSyncScheduler', () => {
     expect(cron.schedule).toHaveBeenCalledTimes(10);
     expect(cron.schedule).toHaveBeenCalledWith(
       '0 * * * *',
-      expect.any(Function)
+      expect.any(Function),
+      { noOverlap: true }
     );
+  });
+
+  it('hands node-cron the running sync so noOverlap can see it', async () => {
+    let finishSync = () => {};
+    vi.mocked(externalProviderRepository.getProvidersByType).mockReturnValue(
+      new Promise((resolve) => {
+        finishSync = () => resolve([]);
+      })
+    );
+    const fitbit = PROVIDER_SYNC_CONFIGS.find((c) => c.name === 'Fitbit')!;
+    scheduleProviderSync(fitbit);
+    const onTick = vi.mocked(cron.schedule).mock.calls[0][1] as () => unknown;
+
+    let settled = false;
+    const run = Promise.resolve(onTick()).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    finishSync();
+    await run;
+    expect(settled).toBe(true);
   });
 });

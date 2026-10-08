@@ -1,4 +1,6 @@
 import type React from 'react';
+import { format, parseISO } from 'date-fns';
+import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import {
   Tooltip,
@@ -9,6 +11,8 @@ import {
 
 interface FastingZoneBarProps {
   hoursFasted: number;
+  startTime?: Date | string | null;
+  targetEndTime?: Date | string | null;
 }
 
 const ZONES = [
@@ -49,7 +53,12 @@ const ZONES = [
   },
 ];
 
-const FastingZoneBar: React.FC<FastingZoneBarProps> = ({ hoursFasted }) => {
+const FastingZoneBar: React.FC<FastingZoneBarProps> = ({
+  hoursFasted,
+  startTime,
+  targetEndTime,
+}) => {
+  const { t } = useTranslation();
   // Determine current zone index
   const currentZoneIndex = ZONES.findIndex((z) => hoursFasted < z.end);
   const activeIndex =
@@ -57,6 +66,38 @@ const FastingZoneBar: React.FC<FastingZoneBarProps> = ({ hoursFasted }) => {
 
   return (
     <div className="w-full space-y-2">
+      {(startTime || targetEndTime) && (
+        <div className="flex justify-between items-center text-xs text-muted-foreground font-medium mb-1">
+          {startTime ? (
+            <span>
+              {t('fasting.startedAt', 'Started {{time}}', {
+                time: format(
+                  typeof startTime === 'string'
+                    ? parseISO(startTime)
+                    : startTime,
+                  'h:mm a'
+                ),
+              })}
+            </span>
+          ) : (
+            <span />
+          )}
+          {targetEndTime ? (
+            <span>
+              {t('fasting.targetAt', 'Target {{time}}', {
+                time: format(
+                  typeof targetEndTime === 'string'
+                    ? parseISO(targetEndTime)
+                    : targetEndTime,
+                  'h:mm a'
+                ),
+              })}
+            </span>
+          ) : (
+            <span />
+          )}
+        </div>
+      )}
       <div className="flex justify-between text-xs text-muted-foreground uppercase tracking-wider mb-1">
         <span>Metabolic State</span>
         {/* <span>{ZONES[activeIndex].name}</span> */}

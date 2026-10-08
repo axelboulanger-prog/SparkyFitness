@@ -8,6 +8,7 @@ import foodRepository from '../models/foodRepository.js';
 import moodRepository from '../models/moodRepository.js';
 import waterContainerRepository from '../models/waterContainerRepository.js';
 import * as workoutTelemetryRepo from '../models/workoutTelemetryRepository.js';
+import * as mindfulnessRepository from '../models/mindfulnessRepository.js';
 import { resolveActivityMapping } from './workoutActivityMapping.js';
 import {
   computeHrZones,
@@ -674,6 +675,112 @@ function prepareCheckInMeasurement(
   }
 }
 
+// Health Connect only exposes body water as a mass (BodyWaterMassRecord, kg),
+// while check_in_measurements stores it as body_water_percentage. Convert each
+// body_water_mass record with the same day's weight: from this batch first
+// (later record wins, matching the merge below), otherwise from the stored
+// check-in. Without a weight for that day the record is skipped rather than
+// estimated from another day.
+async function resolveBodyWaterPercentages(
+  entries: PreparedHealthEntry[],
+  ctx: HealthBatchContext
+): Promise<
+  Map<
+    number,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    | { measurements: Record<string, any> }
+    | { error: string }
+    | { skipped: string }
+  >
+> {
+  const resolved = new Map<
+    number,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    | { measurements: Record<string, any> }
+    | { error: string }
+    | { skipped: string }
+  >();
+  const pending: Array<{ index: number; entryDate: string; massKg: number }> =
+    [];
+  const batchWeights = new Map<string, number>();
+  entries.forEach(({ entry, parsedDate }, index) => {
+    const canonical = TYPE_ALIASES[entry?.type] ?? entry?.type;
+    if (canonical === 'weight') {
+      const prepared = prepareCheckInMeasurement(entry);
+      if (!('error' in prepared)) {
+        batchWeights.set(parsedDate, prepared.measurements.weight);
+      }
+    } else if (canonical === 'body_water_mass') {
+      const massKg = parseFloat(entry.value);
+      if (isNaN(massKg) || massKg <= 0) {
+        resolved.set(index, {
+          error: `Invalid value for ${entry.type}. Must be a positive number.`,
+        });
+      } else {
+        pending.push({ index, entryDate: parsedDate, massKg });
+      }
+    }
+  });
+  if (pending.length === 0) {
+    return resolved;
+  }
+
+  const datesWithoutBatchWeight = [
+    ...new Set(
+      pending
+        .filter(({ entryDate }) => !batchWeights.has(entryDate))
+        .map(({ entryDate }) => entryDate)
+    ),
+  ].sort();
+  const storedWeights = new Map<string, number>();
+  let lookupError: string | null = null;
+  if (datesWithoutBatchWeight.length > 0) {
+    try {
+      const rows =
+        await measurementRepository.getCheckInMeasurementsByDateRange(
+          ctx.userId,
+          datesWithoutBatchWeight[0],
+          datesWithoutBatchWeight[datesWithoutBatchWeight.length - 1]
+        );
+      for (const row of rows ?? []) {
+        const weight = Number(row.weight);
+        // Number(null) is 0 and Number(undefined) is NaN, so both are excluded.
+        if (weight > 0 && !storedWeights.has(row.entry_date)) {
+          storedWeights.set(row.entry_date, weight);
+        }
+      }
+    } catch (error) {
+      lookupError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  for (const { index, entryDate, massKg } of pending) {
+    const weight = batchWeights.get(entryDate) ?? storedWeights.get(entryDate);
+    if (weight === undefined) {
+      resolved.set(
+        index,
+        lookupError !== null
+          ? { error: `Failed to process entry: ${lookupError}` }
+          : {
+              skipped:
+                'Body water mass needs a weight on the same day to be stored as a percentage.',
+            }
+      );
+      continue;
+    }
+    const percentage = Math.round((massKg / weight) * 10000) / 100;
+    resolved.set(
+      index,
+      percentage > 100
+        ? {
+            error: `Invalid value for ${entries[index].entry.type}. Body water mass cannot exceed the weight of the same day.`,
+          }
+        : { measurements: { body_water_percentage: percentage } }
+    );
+  }
+  return resolved;
+}
+
 // Shared batched write for the check-in family (steps/weight/body_fat/height):
 // all valid records go through one bulkUpsertCheckInMeasurements call (one
 // client + one transaction), with same-date records merged server-side
@@ -714,8 +821,19 @@ const checkInHandleBatch: HandleBatchFn = async (entries, ctx) => {
   const todayForUser = hasGuardedBmrWrite
     ? todayInZone(await loadUserTimezone(ctx.userId))
     : null;
+  const bodyWaterPercentages = await resolveBodyWaterPercentages(entries, ctx);
   for (let i = 0; i < entries.length; i++) {
-    const prepared = prepareCheckInMeasurement(entries[i].entry);
+    const prepared =
+      bodyWaterPercentages.get(i) ??
+      prepareCheckInMeasurement(entries[i].entry);
+    if ('skipped' in prepared) {
+      log(
+        'info',
+        `healthDataHandlers: skipping ${entries[i].entry?.type} for ${entries[i].parsedDate} — no weight on that day to convert it to a percentage.`
+      );
+      outcomes[i] = { status: 'skipped', reason: prepared.skipped };
+      continue;
+    }
     if ('error' in prepared) {
       outcomes[i] = { status: 'error', error: prepared.error };
       continue;
@@ -1075,6 +1193,13 @@ const bodyWaterHandler: HealthTypeHandler = {
   handleBatch: checkInHandleBatch,
 };
 
+// Health Connect body water arrives as a mass in kg and is converted to
+// body_water_percentage in checkInHandleBatch (see resolveBodyWaterPercentages).
+const bodyWaterMassHandler: HealthTypeHandler = {
+  handle: handleCheckInEntry,
+  handleBatch: checkInHandleBatch,
+};
+
 const bmrHandler: HealthTypeHandler = {
   handle: handleCheckInEntry,
   handleBatch: checkInHandleBatch,
@@ -1333,6 +1458,85 @@ const moodHandler: HealthTypeHandler = {
       return {
         status: 'error',
         error: `Failed to process Mood entry: ${message}`,
+      };
+    }
+  },
+};
+
+const mindfulnessHandler: HealthTypeHandler = {
+  async handle(entry, ctx) {
+    const rawDuration =
+      entry.duration_seconds ??
+      entry.duration ??
+      (entry.value !== null && entry.value !== undefined
+        ? Number(entry.value) * 60
+        : undefined);
+    const durationSeconds = Number(rawDuration);
+    if (isNaN(durationSeconds) || durationSeconds <= 0) {
+      return {
+        status: 'error',
+        error:
+          'Invalid duration for MindfulnessSession. Must be greater than 0 seconds.',
+      };
+    }
+    const sessionType =
+      typeof entry.session_type === 'string'
+        ? entry.session_type
+        : 'meditation';
+    const provider =
+      typeof entry.source === 'string' ? entry.source : 'apple_health';
+    const externalId = entry.source_id
+      ? String(entry.source_id)
+      : entry.id
+        ? String(entry.id)
+        : null;
+    try {
+      const heartRateAvgRaw =
+        entry.heart_rate_avg !== null && entry.heart_rate_avg !== undefined
+          ? Number(entry.heart_rate_avg)
+          : entry.avg_heart_rate !== null && entry.avg_heart_rate !== undefined
+            ? Number(entry.avg_heart_rate)
+            : null;
+      const heartRateStartRaw =
+        entry.heart_rate_start !== null && entry.heart_rate_start !== undefined
+          ? Number(entry.heart_rate_start)
+          : null;
+      const heartRateEndRaw =
+        entry.heart_rate_end !== null && entry.heart_rate_end !== undefined
+          ? Number(entry.heart_rate_end)
+          : null;
+      const hrvRmssdRaw =
+        entry.hrv_rmssd !== null && entry.hrv_rmssd !== undefined
+          ? Number(entry.hrv_rmssd)
+          : null;
+
+      const result = await mindfulnessRepository.createMindfulnessSession(
+        ctx.userId,
+        {
+          entry_date: ctx.parsedDate,
+          start_time: entry.startTime ? String(entry.startTime) : null,
+          end_time: entry.endTime ? String(entry.endTime) : null,
+          duration_seconds: Math.round(durationSeconds),
+          session_type: sessionType,
+          provider,
+          external_id: externalId,
+          heart_rate_avg: heartRateAvgRaw,
+          heart_rate_start: heartRateStartRaw,
+          heart_rate_end: heartRateEndRaw,
+          hrv_rmssd: hrvRmssdRaw,
+          notes: entry.notes ? String(entry.notes) : null,
+        },
+        ctx.actingUserId
+      );
+      return { status: 'success', data: result };
+    } catch (mindfulError) {
+      const message =
+        mindfulError instanceof Error
+          ? mindfulError.message
+          : String(mindfulError);
+      return {
+        status: 'error',
+        error: `Failed to process MindfulnessSession entry: ${message}`,
       };
     }
   },
@@ -1627,6 +1831,7 @@ const workoutHandler: HealthTypeHandler = {
         caloriesBurned,
         distance,
         duration,
+        exercise_source_id,
         raw_data,
         source_id,
         steps,
@@ -1636,25 +1841,79 @@ const workoutHandler: HealthTypeHandler = {
         activityType,
         entry.modality
       );
-      let exercise = await exerciseDb.findExerciseByNameAndUserId(
-        exerciseName,
-        ctx.userId
-      );
+      let exercise = null;
+      if (
+        typeof exercise_source_id === 'string' &&
+        exercise_source_id.length > 0
+      ) {
+        exercise = await exerciseDb.getExerciseBySourceAndSourceId(
+          source,
+          exercise_source_id,
+          ctx.userId
+        );
+      }
       if (!exercise) {
-        exercise = await exerciseDb.createExercise({
-          user_id: ctx.userId,
-          name: exerciseName,
-          is_custom: true,
-          shared_with_public: false,
-          source: source,
-          // Modality is snapshotted from this row when the entry is created, so
-          // it has to be right here; setting it on the entry has no effect.
-          category,
-          modality,
-          calories_per_hour: caloriesBurned
-            ? caloriesBurned / (duration / 3600)
-            : 0,
-        });
+        exercise = await exerciseDb.findExerciseByNameAndUserId(
+          exerciseName,
+          ctx.userId
+        );
+        if (
+          exercise &&
+          typeof exercise_source_id === 'string' &&
+          exercise_source_id.length > 0 &&
+          (exercise.source !== source ||
+            (exercise.source_id && exercise.source_id !== exercise_source_id))
+        ) {
+          exercise = null;
+        }
+        // Backfill source_id on existing legacy exercise so future syncs remain linked after rename
+        if (
+          exercise &&
+          !exercise.source_id &&
+          typeof exercise_source_id === 'string' &&
+          exercise_source_id.length > 0
+        ) {
+          await exerciseDb.updateExercise(exercise.id, ctx.userId, {
+            source_id: exercise_source_id,
+          });
+          exercise.source_id = exercise_source_id;
+        }
+      }
+      if (!exercise) {
+        const newSourceId =
+          typeof exercise_source_id === 'string' &&
+          exercise_source_id.length > 0
+            ? exercise_source_id
+            : null;
+        try {
+          exercise = await exerciseDb.createExercise({
+            user_id: ctx.userId,
+            name: exerciseName,
+            is_custom: true,
+            shared_with_public: false,
+            source: source,
+            source_id: newSourceId,
+            // Modality is snapshotted from this row when the entry is created, so
+            // it has to be right here; setting it on the entry has no effect.
+            category,
+            modality,
+            calories_per_hour: caloriesBurned
+              ? caloriesBurned / (duration / 3600)
+              : 0,
+          });
+        } catch (createError) {
+          // If a concurrent sync request inserted the exercise first, fetch the committed row.
+          if (newSourceId) {
+            exercise = await exerciseDb.getExerciseBySourceAndSourceId(
+              source,
+              newSourceId,
+              ctx.userId
+            );
+          }
+          if (!exercise) {
+            throw createError;
+          }
+        }
       }
       // Per-set duration is stored in integer seconds. Clients send either
       // duration_seconds (always seconds; old servers drop the unknown field
@@ -1947,6 +2206,7 @@ export const HEALTH_TYPE_HANDLERS: Record<string, HealthTypeHandler> = {
   muscle_mass_kg: muscleMassHandler,
   bone_mass_kg: boneMassHandler,
   body_water_percentage: bodyWaterHandler,
+  body_water_mass: bodyWaterMassHandler,
   bmr: bmrHandler,
   SleepSession: sleepSessionHandler,
   Stress: stressHandler,
@@ -1954,6 +2214,7 @@ export const HEALTH_TYPE_HANDLERS: Record<string, HealthTypeHandler> = {
   Nutrition: nutritionHandler,
   sleep_entry: sleepEntryHandler,
   Mood: moodHandler,
+  MindfulnessSession: mindfulnessHandler,
 };
 
 // Lookup-only normalization of incoming type spellings to canonical handler
@@ -1971,12 +2232,18 @@ export const TYPE_ALIASES: Record<string, string> = {
   bone_mass: 'bone_mass_kg',
   BoneMass: 'bone_mass_kg',
   muscle_mass: 'muscle_mass_kg',
+  // Health Connect body water is a mass (kg); converted to a percentage.
+  BodyWaterMass: 'body_water_mass',
   Height: 'height',
   basal_metabolic_rate: 'bmr',
   BasalMetabolicRate: 'bmr',
   resting_energy: 'bmr',
   ExerciseSession: 'Workout',
   mood: 'Mood',
+  MindfulSession: 'MindfulnessSession',
+  mindfulness_session: 'MindfulnessSession',
+  mindfulness: 'MindfulnessSession',
+  mindful: 'MindfulnessSession',
 };
 
 /**

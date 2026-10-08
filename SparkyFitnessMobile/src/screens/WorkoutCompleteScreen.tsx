@@ -31,7 +31,9 @@ import {
   resolveSnapshotModality,
   summarizeWorkoutSpan,
   summarizeWorkoutHeartRate,
+  hasBodyweightExercise,
 } from '../utils/workoutSession';
+import { useBodyWeightKg } from '../hooks/useBodyWeightKg';
 import type { RootStackScreenProps } from '../types/navigation';
 
 type Props = RootStackScreenProps<'WorkoutComplete'>;
@@ -90,9 +92,20 @@ function WorkoutCompleteScreen({ navigation, route }: Props) {
   const { getImageSource } = useExerciseImageSource();
   const { runNavigationAction } = useNavigationActionGuard(navigation);
 
+  const bodyWeightKg = useBodyWeightKg(
+    session.entry_date,
+    hasBodyweightExercise(session.exercises)
+  );
   const summary = useMemo(
-    () => buildWorkoutCompletionSummary(session, completedSetIds, prSetIds, t),
-    [session, completedSetIds, prSetIds, t]
+    () =>
+      buildWorkoutCompletionSummary(
+        session,
+        completedSetIds,
+        prSetIds,
+        t,
+        bodyWeightKg
+      ),
+    [session, completedSetIds, prSetIds, t, bodyWeightKg]
   );
   const hasRecords = summary.prRows.length > 0;
 

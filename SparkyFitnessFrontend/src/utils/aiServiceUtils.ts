@@ -112,7 +112,7 @@ export const getModelOptions = (serviceType: string): string[] => {
         'grok-build-0.1',
       ];
     case 'perplexity':
-      return ['sonar', 'sonar-pro', 'sonar-reasoning'];
+      return ['fast', 'low', 'medium', 'high', 'xhigh'];
     case 'meta':
       // Meta Superintelligence Labs' Muse Spark, served over an
       // OpenAI-compatible Chat Completions API. One published model for now.

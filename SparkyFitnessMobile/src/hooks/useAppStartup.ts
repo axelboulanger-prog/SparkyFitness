@@ -21,6 +21,7 @@ import {
   registerLocalizedNotificationPresentation,
 } from '../services/notifications';
 import { initMedicationNotificationActions } from '../services/medicationNotificationHandler';
+import { ensureSymptomNotificationCategory } from '../services/symptomReminderService';
 import { initWorkoutLiveActivity } from '../services/workoutLiveActivity';
 import { ensureTimezoneBootstrapped } from '../services/api/preferencesApi';
 
@@ -71,6 +72,7 @@ export function useAppStartup({ shouldYieldObserverSync }: AppStartupArgs) {
 
     initWorkoutNotificationActions();
     initMedicationNotificationActions();
+    void ensureSymptomNotificationCategory();
 
     // Keeps the iOS Live Activity or Android ongoing notification in sync
     // with the active-workout store.

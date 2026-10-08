@@ -83,7 +83,14 @@
     "vo2Max": "VO₂ max",
     "fitnessAge": "Věk: {{val}}",
     "readiness": "Připravenost",
-    "recHours": "Doba regenerace: {{val}}"
+    "recHours": "Doba regenerace: {{val}}",
+    "trainingLoad": "Tréninková zátěž",
+    "acute": "Akutní",
+    "ratio": "Poměr: {{val}}",
+    "chronic": "Chronická: {{val}}",
+    "empty": "Pro tento den nejsou synchronizována žádná data ze zařízení.",
+    "skinTemp": "Teplota pokožky",
+    "weekly": "Týdně"
   },
   "foodCsvImport": {
     "title": "Import dat o potravinách",
@@ -168,9 +175,9 @@
       "thu": "Čt",
       "fri": "Pá",
       "sat": "So",
-      "loggedCount_one": "{{count}} zaznamenané příznaky",
-      "loggedCount_few": "",
-      "loggedCount_other": "",
+      "loggedCount_one": "{{count}} zaznamenaný příznak",
+      "loggedCount_few": "{{count}} zaznamenané příznaky",
+      "loggedCount_other": "{{count}} zaznamenaných příznaků",
       "maxSeverity": "Maximální závažnost: {{n}}",
       "skipped": "Vynecháno"
     },
@@ -750,7 +757,11 @@
     "autoCalculateSelect": "Zahrnout do hromadného automatického výpočtu",
     "autoCalculateSelectAll": "Vybrat vše",
     "autoCalculateSelectNone": "Zrušit výběr",
-    "autoCalculateApplySelected": "Automaticky vypočítat vybrané ({{count}})"
+    "autoCalculateApplySelected": "Automaticky vypočítat vybrané ({{count}})",
+    "caffeine": "Kofein",
+    "waterContent": "Obsah vody",
+    "alcohol": "Alkohol",
+    "abv": "Obsah alkoholu (%)"
   },
   "calculationSettings": {
     "showNetCarbs": "Zobrazit čisté sacharidy (sacharidy mínus vláknina)",
@@ -786,7 +797,9 @@
     "saveSuccessDesc": "Nastavení výpočtů bylo úspěšně uloženo!",
     "selectBmrAlgorithm": "Vyberte algoritmus BMR",
     "selectBodyFatAlgorithm": "Vyberte algoritmus tělesného tuku",
-    "selectEnergyUnitPlaceholder": "Vyberte jednotku energie"
+    "selectEnergyUnitPlaceholder": "Vyberte jednotku energie",
+    "useExternalBmr": "Použít naměřený BMR z kontrolních měření a synchronizovaných zařízení",
+    "useExternalBmrHint": "Ve výchozím nastavení vypnuto: dokud to nezapneš, vždy se používá tebou zvolený vzorec. Po zapnutí nahradí BMR zaznamenaný při check-inu nebo synchronizovaný z chytré váhy či od poskytovatele zdravotních dat vzorec pro daný den, pokud je pro tebe fyziologicky věrohodný. Některá zařízení hlásí BMR jako průběžný denní součet, a ne jako hodnotu (rychlost) za den, proto je tato funkce volitelná."
   },
   "aboutDialog": {
     "title": "O SparkyFitness",
@@ -1045,7 +1058,14 @@
       "exercises": "cviků",
       "name": "Název",
       "deleteConfirmationDescription": "Opravdu chcete tento cvik smazat? Tuto akci nelze vrátit zpět.",
-      "deleteImpactDescription": "Tento cvik se používá v jiných záznamech nebo tréninkových plánech. Jeho smazání může tyto záznamy ovlivnit."
+      "deleteImpactDescription": "Tento cvik se používá v jiných záznamech nebo tréninkových plánech. Jeho smazání může tyto záznamy ovlivnit.",
+      "bulkDeleteDescription": "Odeber těchto {{count}} cviků ze své knihovny a ze všech tréninkových předvoleb a plánů. Již zaznamenané tréninky zůstanou zachovány v deníku.",
+      "cancel": "Zrušit",
+      "delete": "Smazat",
+      "deleteExerciseConfirmTitle": "Smazat {{exerciseName}}?",
+      "deleteKeepsDiaryHint": "Smazáním se cvik odebere z tvé knihovny, předvoleb i plánů. U zaznamenaných tréninků zůstane zachován jeho název, obrázek, série i opakování.",
+      "deleteWithHistory": "Smazat včetně historie",
+      "diaryEntriesCount": "Zaznamenané tréninky: {{count}}"
     },
     "exerciseImportCSV": {
       "importExerciseData": "Importovat data cvičení",
@@ -3765,7 +3785,6 @@
       "lapTableCaloriesHeader": "Kalorie",
       "heartRateTimeInZonesTitle": "Čas srdeční frekvence v zónách",
       "timeInZoneSLabel": "Čas v zóně (s)",
-      "avgMovingSpeed": "Průměrná rychlost pohybu",
       "caloriesBreakdown": "Aktivní / klidové kalorie",
       "elapsedTime": "Celkový čas",
       "elevationRange": "Min. / max. nadmořská výška",

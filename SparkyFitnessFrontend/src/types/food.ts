@@ -82,7 +82,8 @@ export interface Food {
     | 'usda'
     | 'yazio'
     | 'norish'
-    | 'swissfood';
+    | 'swissfood'
+    | 'canadian-nutrient-file';
   provider_verified?: boolean;
   default_variant?: FoodVariant;
   variants?: FoodVariant[];

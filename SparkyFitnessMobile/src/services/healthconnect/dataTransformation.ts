@@ -219,6 +219,12 @@ const VALUE_TRANSFORMERS: Record<string, ValueTransformer> = {
     return value !== null && date ? { value, date } : null;
   },
 
+  BodyWaterMass: (rec) => {
+    const value = extractNestedValue(rec, 'mass', 'inKilograms');
+    const date = extractDate(rec, 'time', 'startTime');
+    return value !== null && date ? { value, date } : null;
+  },
+
   ElevationGained: (rec) => {
     const value = extractNestedValue(rec, 'elevation', 'inMeters');
     const date = getDateString(rec.startTime);
@@ -805,6 +811,15 @@ const DIRECT_TRANSFORMERS: Record<string, DirectTransformer> = {
         },
       ],
       source_id: metadata?.id,
+      ...(exerciseType != null
+        ? {
+            exercise_source_id: isSpecificType
+              ? String(exerciseType)
+              : sourceTitle
+                ? `${exerciseType}_${sourceTitle.toLowerCase()}`
+                : String(exerciseType),
+          }
+        : {}),
       ...extractTimezoneMetadata(rec),
     };
     output.push(attachWorkoutTelemetry(exerciseSession, rec));

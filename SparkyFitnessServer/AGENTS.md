@@ -1,6 +1,6 @@
 # AGENTS.md
 
-_Last updated: 2026-09-27_
+_Last updated: 2026-10-07_
 
 SparkyFitness Server is the backend API package for the SparkyFitness monorepo. Use this file as the primary guide for work inside `SparkyFitnessServer/`.
 
@@ -28,7 +28,7 @@ If a task also touches `shared/`, the frontend, or the mobile app, read the rele
 - Stack: Express 5, PostgreSQL via `pg`, Better Auth, Zod, TypeScript 5, Vitest 4, ESLint 10
 - Module system: ESM with `type: "module"` and `moduleResolution: "NodeNext"`
 - The package is now effectively TypeScript-first; almost all source files are `.ts`
-- Main domains: food and meal tracking, exercise logging, health and sleep data, sleep science, fasting, medications, mood, menstrual cycle and pregnancy, reporting, AI chat, onboarding, identity, admin tooling, and external provider integrations
+- Main domains: food and meal tracking, exercise logging, health and sleep data, sleep science, fasting, medications, symptom and episode tracking, mood, menstrual cycle and pregnancy, reporting, AI chat, onboarding, identity, admin tooling, and external provider integrations
 
 ## Verified Commands
 
@@ -57,14 +57,18 @@ pnpm exec eslint routes/v2/foodRoutes.ts services/foodCoreService.ts
 ## Source Map
 
 - `index.ts` - real dev entrypoint; loads env, secrets, and preflight checks before booting the app
-- `SparkyFitnessServer.ts` - Express app shell, route mounting, Swagger/ReDoc, cron setup, graceful shutdown
+- `SparkyFitnessServer.ts` - Express app shell, route mounting, Swagger/ReDoc, startup, graceful shutdown
+- `services/backgroundJobScheduler.ts` - starts every scheduled background job at startup, including the demo reset; provider syncs are listed in `services/providerSyncScheduler.ts`; `SPARKY_FITNESS_DISABLE_SCHEDULED_JOBS=true` skips them all
 - `auth.ts` - Better Auth configuration, plugins, session behavior, SSO provider syncing
 - `routes/` - primary HTTP route surface
 - `routes/v2/` - newer typed route surface; pair these changes with `schemas/`
 - `routes/v2/openFoodFactsContributionRoutes.ts` - owner-only single-food preview and explicit photo-backed publication; background contributions are disabled for this release
+- `routes/v2/symptomRoutes.ts` - generic symptom tracking (`symptoms` permission): definitions (`/custom`), the pick-list library (`/options`), entries and episodes (`/entries`, `/entries/ongoing`, `/entries/:id/end`, `/entries/:id/severity`), photos, and symptom-free days. Logic lives in `services/symptomService.ts` over `models/symptomRepository.ts` and `models/symptomOptionRepository.ts`; the request/response contract is `../shared/src/schemas/api/Symptoms.api.zod.ts`
+- `routes/reportRoutes.ts` `GET /reports/training-consistency` - the consistency view (#59): `reportService.getTrainingConsistency` reads a fixed 26 weeks of exercise entries and hands them to the shared `buildTrainingConsistency`, so web and mobile show the same streak and weekly sets (`reports` permission)
 - `routes/v2/reportRoutes.ts` - weekly alcohol rollup and the zero-padded hydration/caffeine/alcohol range used by the Trends charts (`reports` permission)
 - `routes/v2/nutritionKineticsRoutes.ts` - active-caffeine estimate and bedtime cutoff (`diary` permission)
 - `routes/v2/workoutCoachingRoutes.ts` - adaptive coaching (#1560): session feedback (`workout_feedback`), the per-user `adaptive_workout_suggestions` setting (owner-only write), and recent-history signals (`diary` permission). `GET /v2/exercises/:id/alternatives` (ranked substitutes) lives in `routes/v2/exerciseRoutes.ts`
+- `routes/v2/mindfulnessRoutes.ts` - mindfulness & meditation sessions tracking (`checkin` permission): day summaries (`/day-summary`), session logs and telemetry (`/entries`, `/entries/:id`). Logic lives in `models/mindfulnessRepository.ts`; the request/response contract is `../shared/src/schemas/api/Mindfulness.api.zod.ts`
 - `routes/auth/` - auth-specific route fragments mounted through `routes/authRoutes.ts`
 - `services/` - business logic and orchestration
 - `models/` - PostgreSQL repositories and persistence helpers
@@ -101,7 +105,7 @@ When searching, ignore noisy/generated directories unless you explicitly need th
 ### Boot and App Shell
 
 - `index.ts` is the true local boot path used by `pnpm start`; do not bypass it for normal development because it performs env loading and preflight work
-- `SparkyFitnessServer.ts` creates the Express app, configures static upload serving, mounts auth interception, registers routes, exposes API docs, schedules cron jobs, and handles graceful shutdown
+- `SparkyFitnessServer.ts` creates the Express app, configures static upload serving, mounts auth interception, registers routes, exposes API docs, starts background jobs through `services/backgroundJobScheduler.ts`, and handles graceful shutdown
 - Startup order matters:
   - `index.ts`: await `initializeDatabase()`, which applies pending migrations and then reapplies `db/rls_policies.sql` under a PostgreSQL advisory lock, **before** importing `SparkyFitnessServer.ts` (and therefore `auth.ts`)
   - upsert env-configured OIDC provider
@@ -174,9 +178,10 @@ When searching, ignore noisy/generated directories unless you explicitly need th
 ### Uploads: Public vs Sensitive
 
 - `SparkyFitnessServer.ts` serves the uploads root publicly at `/uploads` and `/api/uploads`; both are in `publicRoutes`, so `authenticate` never runs on them
-- Sensitive subtrees are **denied on the static mount** and served instead by an authenticated, owner-checked per-id route. Two exist today:
+- Sensitive subtrees are **denied on the static mount** and served instead by an authenticated, owner-checked per-id route. Three exist today:
   - `check-in` -> `GET /api/measurements/check-in-photos/file/:id` (delegatable via the `checkin` permission)
   - `pregnancy` -> `GET /api/v2/pregnancy/photos/file/:id` (owner-only; deliberately **no** `checkPermissionMiddleware`, because reproductive-health data is never delegated)
+  - `symptoms` -> `GET /api/v2/symptoms/photos/file/:id` (delegatable via the `symptoms` permission)
 - Adding a sensitive upload subtree means adding its directory name to `SENSITIVE_UPLOAD_SUBTREES` in `SparkyFitnessServer.ts` **and** adding an authenticated file route; the deny rule matches the decoded, normalized path, because a prefix match on the raw URL is bypassable with `..%2f`
 - Responses for these domains omit `file_path`: the on-disk layout is a server detail and clients address photos by id
 - `tests/uploadsStaticMount.test.ts` guards both the deny behavior and the fact that the deny rule is registered before `express.static`
@@ -193,8 +198,9 @@ When searching, ignore noisy/generated directories unless you explicitly need th
   - `req.user`
 - `req.userId` is the active RLS target; `req.authenticatedUserId` is the logged-in actor
 - Family and delegated access flow through `middleware/checkPermissionMiddleware.ts`, `middleware/onBehalfOfMiddleware.ts`, and the auth middleware’s active-user switching
-- `checkPermissionMiddleware(permissionType)` guards routes; permission types are `'diary'`, `'reports'`, and `'checkin'`
+- `checkPermissionMiddleware(permissionType)` guards routes; permission types are `'diary'`, `'reports'`, `'checkin'`, `'medications'`, and `'symptoms'` (GET resolves to the read-only `*_read` variant)
 - If you change auth behavior, check both cookie-backed sessions and API key flows
+- API keys carry a scope in `api_key.permissions` (Better Auth format, `@workspace/shared` `ApiKeys.api.zod.ts`): `{ sparky: ["read"] }` is read-only, `{ sparky: ["read", "write"] }` or no permissions is full access. The scope is set only by `POST /api/identity/user/generate-api-key`, because Better Auth refuses `permissions` from a client. `authenticate` sets `req.apiKeyReadOnly` and answers 403 for anything but GET/HEAD/OPTIONS plus the POST allowlist in `utils/apiKeyScope.ts`; the `/api/auth` interceptor refuses mutations from read-only keys via `middleware/readOnlyApiKeyGuard.ts`; `/mcp` filters tools and actions with `ai/mcp/toolAccess.ts`. A new MCP tool or action is unavailable to read-only keys until it is classified there
 
 ### Dates, Day Strings, and Timezones
 
@@ -263,10 +269,15 @@ When searching, ignore noisy/generated directories unless you explicitly need th
   inspect `services/chatService.ts`, `ai/tools/`, and the matching domain service and repository
 - Fasting or mood issue:
   inspect `routes/fastingRoutes.ts` / `routes/moodRoutes.ts` and `models/fastingRepository.ts` / `models/moodRepository.ts`
+- Symptom or episode tracking issue (#1882):
+  inspect `routes/v2/symptomRoutes.ts`, `services/symptomService.ts`, `models/symptomRepository.ts`, `models/symptomOptionRepository.ts`, and the shared contract and built-ins in `../shared/src/schemas/api/Symptoms.api.zod.ts` and `../shared/src/symptoms/`. `symptom_entries` also holds cycle-hub symptoms (`source = 'cycle'`), which RLS keeps owner-only
 - Medications, cycle, or pregnancy issue:
   inspect the matching v2 route (`routes/v2/medicationRoutes.ts`, `routes/v2/cycleRoutes.ts`, `routes/v2/pregnancyRoutes.ts`), its Zod schema in `schemas/`, then `services/cycleService.ts` / `services/pregnancyService.ts` and the `models/medication*Repository.ts` / `models/cycleRepository.ts` / `models/pregnancyRepository.ts` files
 - Exercise alternatives, workout feedback, or adaptive suggestions issue (#1560):
   inspect `services/exerciseAlternativesService.ts` (library + Free Exercise DB candidates, dedupe) with the pure ranking in `utils/exerciseAlternativesRanking.ts` and the muscle/equipment vocabulary in `../shared/src/constants/exerciseTaxonomy.ts`; feedback in `services/workoutCoachingService.ts` + `models/workoutFeedbackRepository.ts`; signals in `services/adaptiveWorkoutService.ts`. The rules that turn signals into weight changes are client-side and shared (`../shared/src/utils/adaptiveCoaching.ts`) so web, mobile and the AI tools agree; the server only reports what happened. AI actions: `suggest_alternatives`, `rate_workout`, `get_workout_coaching` in `ai/tools/exerciseTools.ts`
+- Bodyweight exercise load, volume or 1RM issue (#56):
+  a `bodyweight_reps` set's weight is signed added/assisting load, and its load is body weight plus that weight (`effectiveLoadKg` in `../shared/src/utils/exerciseLoad.ts`). SQL mirrors the rule in `utils/exerciseLoadSql.ts` (`bodyWeightJoinSql`, `setLoadSql`), used by `services/exerciseStatsService.ts` and `models/exerciseEntry.ts`'s progress query; `services/reportService.ts` applies the shared helper with readings from `reportRepository.getBodyWeightReadings`. Keep the two copies identical. A negative set weight is rejected unless that exercise's modality is `bodyweight_reps`. `models/exercise.ts`'s `createExercise` defaults the modality from equipment through `resolveExerciseModality`
+  `weight_distance` (weighted carries) and `weight_duration` (loaded holds) store weight plus distance (km) or duration (s); stats treat them as weight-based, not cardio, and best-set ordering falls back to distance then duration.
 - Sleep or sleep-science issue:
   inspect `routes/sleepRoutes.ts`, `routes/sleepScienceRoutes.ts`, `services/sleepAnalyticsService.ts`, `services/sleepScienceService.ts`, and the sleep repositories
 

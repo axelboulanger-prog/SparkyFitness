@@ -669,6 +669,9 @@ const DIRECT_TRANSFORMERS: Record<string, DirectTransformer> = {
         },
       ],
       source_id: rec.uuid as string | undefined,
+      ...(activityType != null
+        ? { exercise_source_id: String(activityType) }
+        : {}),
       ...timezone,
     };
     output.push(attachWorkoutTelemetry(exerciseSession, rec));

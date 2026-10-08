@@ -34,6 +34,7 @@ import { useExerciseStats } from '../hooks/useExerciseStats';
 import type { GetImageSource } from '../hooks/useExerciseImageSource';
 import {
   distanceFromKm,
+  storedWeightInUnit,
   weightFromKg,
   weightToKg,
 } from '../utils/unitConversions';
@@ -49,6 +50,9 @@ import {
   evaluateExerciseProgression,
   liveAdaptiveAdjustment,
   isDurationModality,
+  isWeightDistanceModality,
+  isWeightDurationModality,
+  setDistanceUnitLabel,
   rendersCardioEffortForm,
   resolveLiveAssumedSetValues,
   resolveSnapshotModality,
@@ -59,9 +63,12 @@ import {
 } from '../utils/workoutSession';
 import {
   NO_ADAPTIVE_ADJUSTMENT,
+  isBodyweightModality,
   shouldSuggestVariation,
 } from '@workspace/shared';
+import { useBodyWeightKg } from '../hooks/useBodyWeightKg';
 import type { ExerciseProgressionPatch } from '../hooks/draftExercisesSlice';
+import { useLiveHeartRate } from '../stores/liveHeartRateStore';
 import { useActiveWorkoutStore } from '../stores/activeWorkoutStore';
 import AdaptiveSuggestionBanner from './AdaptiveSuggestionBanner';
 import type {
@@ -87,6 +94,11 @@ interface ActiveWorkoutExerciseCardProps {
   activeSetId: string | null;
   metricColumn: ActiveWorkoutMetricColumn;
   weightUnit: 'kg' | 'lbs';
+  /**
+   * The workout's day, for the body weight a bodyweight exercise counts.
+   * Defaults to today (a live workout).
+   */
+  entryDate?: string | null;
   distanceUnit?: 'km' | 'miles';
   /**
    * False keeps cardio (`duration_distance`) exercises on the duration-style
@@ -124,6 +136,13 @@ interface ActiveWorkoutExerciseCardProps {
    * which keeps the exercise-global fallback unchanged.
    */
   sourcePresetId?: number;
+  /**
+   * Live only: false while `sourcePresetId` may still change (the screen is
+   * still checking the preset belongs to the active server). The stats query
+   * runs meanwhile, but its unscoped history is not captured into the store,
+   * which keeps the first capture per exercise.
+   */
+  historyScopeSettled?: boolean;
   /**
    * Live only: the store's PR stamps. When any of this exercise's set ids is
    * stamped, the Best line goes gold and shows the new record (the server
@@ -223,10 +242,7 @@ interface ActiveWorkoutExerciseCardProps {
 
 /** A stored kg increment shown in the lifter's unit, trimmed for an input. */
 function formatIncrementForInput(kg: number, unit: 'kg' | 'lbs'): string {
-  // numeric(6,2) kg makes 10 lb read back as 10.009 lb; one decimal in lb
-  // (two in kg) restores what was typed.
-  const factor = unit === 'lbs' ? 10 : 100;
-  return String(Math.round(weightFromKg(kg, unit) * factor) / factor);
+  return String(storedWeightInUnit(kg, unit));
 }
 
 /**
@@ -265,6 +281,15 @@ export function ExerciseThumb({
   );
 }
 
+/** Added weight a set is ranked on. An unweighted bodyweight set is +0. */
+function rankedAddedWeight(
+  weight: number | null | undefined,
+  bodyweight: boolean
+): number | null {
+  if (weight != null) return weight;
+  return bodyweight ? 0 : null;
+}
+
 function ActiveWorkoutExerciseCard({
   exercise,
   expanded,
@@ -272,12 +297,14 @@ function ActiveWorkoutExerciseCard({
   activeSetId,
   metricColumn,
   weightUnit,
+  entryDate,
   distanceUnit = 'km',
   cardioFormEnabled = true,
   getImageSource,
   mode = 'live',
   excludePresetEntryId,
   sourcePresetId,
+  historyScopeSettled = true,
   prSetIds,
   showRestChip = true,
   onChangeCalories,
@@ -352,6 +379,11 @@ function ActiveWorkoutExerciseCard({
       : t('workout.lbs', { defaultValue: 'lbs' });
   // Resolved once per exercise; every row and the column header derive from it.
   const modality = resolveSnapshotModality(exercise.exercise_snapshot);
+  // Only fetched for a bodyweight exercise; everything else ignores it.
+  const bodyWeightKg = useBodyWeightKg(
+    entryDate,
+    isBodyweightModality(modality)
+  );
   const durationLike = isDurationModality(modality);
   const cardioForm =
     cardioFormEnabled &&
@@ -360,7 +392,14 @@ function ActiveWorkoutExerciseCard({
   // reps-only tables (both keep weight null); clamp the display to RPE, or
   // keep RIR when that's the chosen effort column. Never written back to the
   // shared preference.
-  const clampedToRpe = durationLike || modality === 'reps_only';
+  const weightDuration = isWeightDurationModality(modality);
+  const weightDistance = isWeightDistanceModality(modality);
+  // Loaded holds and carries log no reps, so volume and 1RM stay empty there too.
+  const clampedToRpe =
+    durationLike ||
+    modality === 'reps_only' ||
+    weightDuration ||
+    weightDistance;
   // The per-set ramp only means something where sets carry a weight.
   const weightRampApplies = !durationLike && modality !== 'reps_only';
   const effectiveMetricColumn =
@@ -546,7 +585,7 @@ function ActiveWorkoutExerciseCard({
     // Wait for the query to resolve (data is null/undefined while loading). A
     // resolved stats object with a null `bestSet` still captures — that's the
     // "no history" baseline.
-    if (!isLive || stats == null) return;
+    if (!isLive || stats == null || !historyScopeSettled) return;
     capturePrBaseline(
       exercise.exercise_id,
       stats.bestSet
@@ -563,6 +602,7 @@ function ActiveWorkoutExerciseCard({
   }, [
     isLive,
     stats,
+    historyScopeSettled,
     exercise.exercise_id,
     capturePrBaseline,
     capturePreviousSessionSets,
@@ -574,25 +614,33 @@ function ActiveWorkoutExerciseCard({
   // session), so the stamped set is what surfaces the new record.
   const stampedBest = useMemo(() => {
     if (!isLive || !prSetIds) return null;
+    const bodyweight = isBodyweightModality(modality);
     let best: { weight: number; reps: number | null } | null = null;
     for (const s of exercise.sets) {
-      if (prSetIds[String(s.id)] !== true || s.weight == null) continue;
-      const contender = { weight: s.weight, reps: s.reps };
+      if (prSetIds[String(s.id)] !== true) continue;
+      const weight = rankedAddedWeight(s.weight, bodyweight);
+      if (weight == null) continue;
+      const contender = { weight, reps: s.reps };
       if (best == null || compareSetRecords(contender, best) > 0)
         best = contender;
     }
     return best;
-  }, [isLive, prSetIds, exercise.sets]);
+  }, [isLive, prSetIds, exercise.sets, modality]);
 
+  const historicalWeight =
+    bestSet == null
+      ? null
+      : rankedAddedWeight(bestSet.weight, isBodyweightModality(modality));
+  const historicalBest =
+    historicalWeight == null || bestSet == null
+      ? null
+      : { weight: historicalWeight, reps: bestSet.reps };
   const bestDisplay =
-    bestSet != null && bestSet.weight != null
+    historicalBest != null
       ? stampedBest != null &&
-        compareSetRecords(stampedBest, {
-          weight: bestSet.weight,
-          reps: bestSet.reps,
-        }) > 0
+        compareSetRecords(stampedBest, historicalBest) > 0
         ? stampedBest
-        : { weight: bestSet.weight, reps: bestSet.reps }
+        : historicalBest
       : null;
   const bestIsPr = stampedBest != null && bestDisplay === stampedBest;
   const bestText =
@@ -616,8 +664,11 @@ function ActiveWorkoutExerciseCard({
   // it only ever arrives from a paired watch or a synced workout. Max is
   // appended in parentheses when it differs from the average, so a steady
   // effort reads as one number instead of the same one twice.
+  // During a live workout, the newest reading the watch sent for this
+  // exercise instead; the saved average only exists once the workout is.
+  const liveBpm = useLiveHeartRate(isLive ? String(exercise.id) : null);
   const heartRateText = (() => {
-    if (!readOnly) return null;
+    if (!readOnly) return liveBpm != null ? String(liveBpm) : null;
     const avg = exercise.avg_heart_rate;
     if (avg == null || avg <= 0) return null;
     const max = exercise.max_heart_rate;
@@ -728,7 +779,7 @@ function ActiveWorkoutExerciseCard({
   );
 
   if (!expanded) {
-    const volumeKg = getExerciseVolumeKg(exercise);
+    const volumeKg = getExerciseVolumeKg(exercise, bodyWeightKg);
     const cardioParts: string[] = [];
     if (cardioForm) {
       const firstCardioSet = exercise.sets[0];
@@ -1420,10 +1471,17 @@ function ActiveWorkoutExerciseCard({
             {heartRateText != null && (
               <View
                 className="flex-row items-center"
-                accessibilityLabel={t('activeWorkout.exercise.heartRateFor', {
-                  defaultValue: 'Average heart rate for {{name}}',
-                  name,
-                })}
+                accessibilityLabel={
+                  readOnly
+                    ? t('activeWorkout.exercise.heartRateFor', {
+                        defaultValue: 'Average heart rate for {{name}}',
+                        name,
+                      })
+                    : t('activeWorkout.exercise.liveHeartRateFor', {
+                        defaultValue: 'Current heart rate for {{name}}',
+                        name,
+                      })
+                }
               >
                 <Icon name="heart-rate" size={14} color={heartRateColor} />
                 <Text
@@ -1490,6 +1548,32 @@ function ActiveWorkoutExerciseCard({
           />
         )}
 
+        {!cardioForm && isBodyweightModality(modality) && (
+          <View
+            className="mx-1 mb-1 flex-row items-start gap-2 rounded-lg bg-surface-secondary px-3 py-2"
+            accessibilityRole="text"
+            testID="bodyweight-banner"
+          >
+            <Icon name="info-circle" size={14} color={accentPrimary} />
+            <Text className="flex-1 text-xs text-text-secondary">
+              {bodyWeightKg != null
+                ? t('workout.bodyweightBanner', {
+                    defaultValue:
+                      'Bodyweight exercise: counts your body weight ({{bodyWeight}} {{unit}}) plus the weight you enter. Use a minus sign for assistance.',
+                    bodyWeight: formatLocalizedNumber(
+                      weightFromKg(bodyWeightKg, weightUnit),
+                      { maximumFractionDigits: 1 }
+                    ),
+                    unit: unitLabel,
+                  })
+                : t('workout.bodyweightBannerNoWeight', {
+                    defaultValue:
+                      'Bodyweight exercise: counts your body weight plus the weight you enter. Use a minus sign for assistance. Log a body weight so volume can be calculated.',
+                  })}
+            </Text>
+          </View>
+        )}
+
         {!cardioForm && exercise.sets.length > 0 && (
           <View className="flex-row items-center px-1 py-1.5">
             <Text
@@ -1525,7 +1609,11 @@ function ActiveWorkoutExerciseCard({
                   </Text>
                 )}
                 <Text className="flex-1 text-center text-xs font-semibold uppercase text-text-muted">
-                  {t('workout.reps', { defaultValue: 'Reps' })}
+                  {weightDuration
+                    ? t('workout.sec', { defaultValue: 'Sec' })
+                    : weightDistance
+                      ? setDistanceUnitLabel(distanceUnit, modality)
+                      : t('workout.reps', { defaultValue: 'Reps' })}
                 </Text>
               </>
             )}
@@ -1579,6 +1667,7 @@ function ActiveWorkoutExerciseCard({
                 <ActiveWorkoutSetRow
                   set={effectiveSet}
                   modality={modality}
+                  bodyWeightKg={bodyWeightKg}
                   distanceUnit={distanceUnit}
                   renderKey={renderKey}
                   displayNumber={workingSetNumbers[index]}

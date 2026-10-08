@@ -1,5 +1,5 @@
 import { ExternalDataProvider } from '@/pages/Settings/ExternalProviderSettings';
-import { apiCall } from '@/api/api';
+import { apiCall, HttpApiError } from '@/api/api';
 import { DataProvider } from '@/types/settings';
 import { ExternalProviderTypes, CorosSyncResult } from '@workspace/shared';
 
@@ -493,16 +493,58 @@ export const handleDisconnectGoogleHealth = async () => {
   }
 };
 
+const fetchGoogleHealthLastSyncAt = async (): Promise<string | null> => {
+  const status: { lastSyncAt: string | null } = await apiCall(
+    '/integrations/googlehealth/status'
+  );
+  return status.lastSyncAt;
+};
+
+export const GOOGLE_HEALTH_SYNC_POLL_MS = 5000;
+export const GOOGLE_HEALTH_SYNC_TIMEOUT_MS = 3 * 60 * 1000;
+
+// The server answers 202 before the sync runs, because a full sync outlasts
+// common reverse-proxy timeouts. last_sync_at only moves when a sync succeeds,
+// so the call resolves once it changes. A default sync finishes well within
+// the limit; a long date range may outlast it, so the timeout message does not
+// claim the sync failed.
 export const handleManualSyncGoogleHealth = async (
   startDate?: string,
   endDate?: string,
   mock?: SyncMockOptions
 ) => {
   try {
+    const lastSyncBefore = await fetchGoogleHealthLastSyncAt();
     await apiCall(`/integrations/googlehealth/sync`, {
       method: 'POST',
       body: JSON.stringify({ startDate, endDate, ...mock }),
     });
+    const deadline = Date.now() + GOOGLE_HEALTH_SYNC_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, GOOGLE_HEALTH_SYNC_POLL_MS)
+      );
+      let lastSyncNow: string | null;
+      try {
+        lastSyncNow = await fetchGoogleHealthLastSyncAt();
+      } catch (error: unknown) {
+        // A lost session will not come back by waiting; anything else may be
+        // a blip while the server-side sync carries on.
+        if (
+          error instanceof HttpApiError &&
+          (error.status === 401 || error.status === 403)
+        ) {
+          throw error;
+        }
+        continue;
+      }
+      if (lastSyncNow !== lastSyncBefore) {
+        return;
+      }
+    }
+    throw new Error(
+      'It may still be running, or it failed on the server. Check back in a few minutes.'
+    );
   } catch (error: unknown) {
     console.error('Error initiating manual Google Health sync:', error);
     throw error;

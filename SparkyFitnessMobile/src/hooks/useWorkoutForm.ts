@@ -8,8 +8,12 @@ import {
   type DraftExercisesAction,
 } from './draftExercisesSlice';
 import { getTodayDate, normalizeDate } from '../utils/dateUtils';
-import { weightFromKg, distanceFromKm } from '../utils/unitConversions';
-import { buildExercisesPayload } from '../utils/workoutSession';
+import { weightFromKg } from '../utils/unitConversions';
+import {
+  buildExercisesPayload,
+  resolveSnapshotModality,
+  setDistanceFromKm,
+} from '../utils/workoutSession';
 import type { WorkoutDraft, WorkoutDraftExercise } from '../types/drafts';
 import { getAppLocale } from '../localization';
 import type { PresetSessionResponse } from '@workspace/shared';
@@ -185,9 +189,11 @@ export function workoutFormReducer(
               set.distance != null
                 ? String(
                     parseFloat(
-                      distanceFromKm(set.distance, action.distanceUnit).toFixed(
-                        2
-                      )
+                      setDistanceFromKm(
+                        set.distance,
+                        action.distanceUnit,
+                        resolveSnapshotModality(exercise.exercise_snapshot)
+                      ).toFixed(2)
                     )
                   )
                 : '',
@@ -231,9 +237,14 @@ export function workoutFormReducer(
               set.distance != null
                 ? String(
                     parseFloat(
-                      distanceFromKm(set.distance, action.distanceUnit).toFixed(
-                        2
-                      )
+                      setDistanceFromKm(
+                        set.distance,
+                        action.distanceUnit,
+                        resolveSnapshotModality({
+                          modality: exercise.modality,
+                          category: exercise.category,
+                        })
+                      ).toFixed(2)
                     )
                   )
                 : '',

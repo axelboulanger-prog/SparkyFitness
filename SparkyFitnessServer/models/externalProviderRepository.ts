@@ -1,6 +1,85 @@
+import type { PoolClient } from 'pg';
 import { getClient, getSystemClient } from '../db/poolManager.js';
 import { encrypt, decrypt, ENCRYPTION_KEY } from '../security/encryption.js';
 import { log } from '../config/logging.js';
+
+/**
+ * Runs a provider's token refresh inside a transaction so the caller's
+ * `SELECT ... FOR UPDATE` on its external_data_providers row makes concurrent
+ * refreshes for that row wait. The next refresher then reads the token the
+ * previous one saved instead of a refresh token the provider already rotated.
+ *
+ * Always commits, even when `refresh` throws: the transaction only holds the
+ * lock, and writes keep taking effect as they would without it (a refresh that
+ * clears tokens before throwing still clears them).
+ */
+async function withProviderTokenLock<T>(
+  client: PoolClient,
+  refresh: () => Promise<T>
+): Promise<T> {
+  await client.query('BEGIN');
+  try {
+    return await refresh();
+  } finally {
+    await client.query('COMMIT');
+  }
+}
+/**
+ * Saves Garmin tokens that the Garmin service refreshed during a request, but
+ * only if the stored tokens are still the ones that request sent. A slower
+ * request that started from older tokens would otherwise overwrite newer ones
+ * saved in the meantime. Returns whether the tokens were saved.
+ */
+async function replaceGarminTokensIfUnchanged(
+  userId: string,
+  sentTokens: string,
+  update: {
+    encrypted_garth_dump: string | null;
+    garth_dump_iv: string | null;
+    garth_dump_tag: string | null;
+    token_expires_at: Date | null;
+    external_user_id: string;
+  }
+): Promise<boolean> {
+  const client = await getClient(userId);
+  try {
+    return await withProviderTokenLock(client, async () => {
+      const { rows } = await client.query(
+        `SELECT id, encrypted_garth_dump, garth_dump_iv, garth_dump_tag
+         FROM external_data_providers
+         WHERE user_id = $1 AND provider_name = 'garmin'
+         FOR UPDATE`,
+        [userId]
+      );
+      const row = rows[0];
+      if (!row?.encrypted_garth_dump) return false;
+      const storedTokens = await decrypt(
+        row.encrypted_garth_dump,
+        row.garth_dump_iv,
+        row.garth_dump_tag,
+        ENCRYPTION_KEY
+      );
+      if (storedTokens !== sentTokens) return false;
+      await client.query(
+        `UPDATE external_data_providers
+         SET encrypted_garth_dump = $1, garth_dump_iv = $2, garth_dump_tag = $3,
+             token_expires_at = $4, external_user_id = $5, updated_at = NOW()
+         WHERE id = $6`,
+        [
+          update.encrypted_garth_dump,
+          update.garth_dump_iv,
+          update.garth_dump_tag,
+          update.token_expires_at,
+          update.external_user_id,
+          row.id,
+        ]
+      );
+      return true;
+    });
+  } finally {
+    client.release();
+  }
+}
 async function getExternalDataProviders(
   targetUserId: string,
   authenticatedUserId?: string
@@ -641,6 +720,97 @@ async function getProvidersByType(providerType: any) {
     client.release();
   }
 }
+/**
+ * Claims the provider row(s) a sync is about to run on: the user's row with
+ * that id, or the user's row(s) of one provider type. A row is claimable when
+ * no sync holds it or the holder's claim is older than the expiry, which frees
+ * rows a crashed server left claimed. Concurrent claims serialize on the row
+ * lock, so only one of them can set sync_started_at.
+ */
+async function claimProviderSyncRows(
+  target:
+    | { userId: string; providerId: string }
+    | { userId: string; providerType: string },
+  claimedAt: Date,
+  expiryMinutes: number
+): Promise<{ matched: number; claimedIds: string[] }> {
+  // Always scoped to the user: provider ids can come from a request body, and
+  // this runs as the system client, so an id alone could claim another user's row.
+  const [where, params] =
+    'providerId' in target
+      ? ['id = $1 AND user_id = $2', [target.providerId, target.userId]]
+      : [
+          'user_id = $1 AND provider_type = $2',
+          [target.userId, target.providerType],
+        ];
+  const n = params.length;
+  const client = await getSystemClient();
+  try {
+    const result = await client.query(
+      `WITH target AS (
+         SELECT id FROM external_data_providers WHERE ${where}
+       ),
+       claimed AS (
+         UPDATE external_data_providers
+         SET sync_started_at = $${n + 1}
+         WHERE id IN (SELECT id FROM target)
+           AND (sync_started_at IS NULL
+             OR sync_started_at < $${n + 1}::timestamptz - make_interval(mins => $${n + 2}))
+         RETURNING id
+       )
+       SELECT (SELECT count(*)::int FROM target) AS matched,
+              COALESCE((SELECT array_agg(id::text) FROM claimed), '{}') AS claimed_ids`,
+      [...params, claimedAt, expiryMinutes]
+    );
+    return {
+      matched: result.rows[0].matched,
+      claimedIds: result.rows[0].claimed_ids,
+    };
+  } finally {
+    client.release();
+  }
+}
+// Clears only the claim this sync made, so a sync whose claim expired cannot
+// release a newer sync's claim on the same row.
+async function releaseProviderSyncRows(
+  ids: string[],
+  claimedAt: Date
+): Promise<void> {
+  if (ids.length === 0) return;
+  const client = await getSystemClient();
+  try {
+    await client.query(
+      `UPDATE external_data_providers
+       SET sync_started_at = NULL
+       WHERE id = ANY($1::uuid[]) AND sync_started_at = $2`,
+      [ids, claimedAt]
+    );
+  } finally {
+    client.release();
+  }
+}
+// Moves this sync's claim to a new time so a long sync keeps it past the
+// expiry. Only rows still holding this sync's claim move; returns their ids.
+async function renewProviderSyncRows(
+  ids: string[],
+  claimedAt: Date,
+  renewedAt: Date
+): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const client = await getSystemClient();
+  try {
+    const result = await client.query(
+      `UPDATE external_data_providers
+       SET sync_started_at = $3
+       WHERE id = ANY($1::uuid[]) AND sync_started_at = $2
+       RETURNING id::text`,
+      [ids, claimedAt, renewedAt]
+    );
+    return result.rows.map((row: { id: string }) => row.id);
+  } finally {
+    client.release();
+  }
+}
 // A user's active providers of the given types, in cascade order (manual
 // sort_order first, then most recently created). Backs the chatbot
 // lookup_food_nutrition provider cascade.
@@ -901,6 +1071,11 @@ export { checkExternalDataProviderAccess };
 export { deleteExternalDataProvider };
 export { getExternalDataProviderByUserIdAndProviderName };
 export { updateProviderLastSync };
+export { claimProviderSyncRows };
+export { releaseProviderSyncRows };
+export { renewProviderSyncRows };
+export { withProviderTokenLock };
+export { replaceGarminTokensIfUnchanged };
 export { getProvidersByType };
 export { getExternalProviderTypes };
 export { getGlobalExternalDataProviders };
@@ -919,6 +1094,11 @@ export default {
   deleteExternalDataProvider,
   getExternalDataProviderByUserIdAndProviderName,
   updateProviderLastSync,
+  claimProviderSyncRows,
+  releaseProviderSyncRows,
+  renewProviderSyncRows,
+  withProviderTokenLock,
+  replaceGarminTokensIfUnchanged,
   getProvidersByType,
   getExternalProviderTypes,
   getGlobalExternalDataProviders,

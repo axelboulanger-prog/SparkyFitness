@@ -11,6 +11,7 @@ const TEST_USER_ID = '00000000-0000-4000-a000-000000000001';
 
 describe('reportService: interval/WOD format strength PR exclusion', () => {
   beforeEach(() => {
+    vi.mocked(reportRepository.getBodyWeightReadings).mockResolvedValue([]);
     vi.clearAllMocks();
   });
 
@@ -204,5 +205,43 @@ describe('reportService: interval/WOD format strength PR exclusion', () => {
 
     // Total volume combines both
     expect(report.keyStats.totalVolume).toBe(180 * 5 + 100 * 25);
+  });
+
+  it('counts body weight plus the added or assisting weight for a bodyweight exercise', async () => {
+    vi.mocked(reportRepository.getBodyWeightReadings).mockResolvedValue([
+      { date: '2026-09-01', weightKg: 80 },
+    ]);
+    vi.mocked(reportRepository.getExerciseEntries).mockResolvedValue([
+      {
+        id: 'entry-dips',
+        entry_date: '2026-09-15',
+        exercise_name: 'Dips',
+        exercise_category: 'strength',
+        exercise_modality: 'bodyweight_reps',
+        workout_format: 'standard',
+        sets: [
+          { set_number: 1, weight: 20, reps: 8 }, // weighted: 100 kg moved
+          { set_number: 2, weight: -30, reps: 10 }, // assisted: 50 kg moved
+        ],
+        exercises: { primary_muscles: JSON.stringify(['triceps']) },
+      },
+    ]);
+
+    const report = await reportService.getExerciseDashboardData(
+      TEST_USER_ID,
+      TEST_USER_ID,
+      '2026-09-01',
+      '2026-09-30',
+      null,
+      null,
+      null
+    );
+
+    expect(report.keyStats.totalVolume).toBe(100 * 8 + 50 * 10);
+    expect(report.muscleGroupVolume['Triceps']).toBe(100 * 8 + 50 * 10);
+    // The PR is ranked on the load moved, not the 20 kg on the belt.
+    expect(report.prData['Dips'].weight).toBe(100);
+    expect(report.prData['Dips'].oneRM).toBeCloseTo(100 * (1 + 8 / 30));
+    expect(report.prProgressionData['Dips'][0].maxWeight).toBe(100);
   });
 });

@@ -1,14 +1,30 @@
 import React from 'react';
-import { StyleSheet } from 'react-native';
+import { AppState, StyleSheet } from 'react-native';
 import { render, fireEvent } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useCSSVariable } from 'uniwind';
 import ActiveWorkoutRestBar from '../../src/components/ActiveWorkoutRestBar';
 import { useNativeIOSTabsActive } from '../../src/services/nativeTabBarPreference';
+import { playIntervalCue } from '../../src/services/sounds';
 
 jest.mock('../../src/services/nativeTabBarPreference', () => ({
   useNativeIOSTabsActive: jest.fn(() => false),
 }));
+
+jest.mock('../../src/services/sounds', () => ({
+  playIntervalCue: jest.fn(),
+}));
+
+const mockPlayIntervalCue = playIntervalCue as jest.MockedFunction<
+  typeof playIntervalCue
+>;
+
+function setAppState(state: string): void {
+  Object.defineProperty(AppState, 'currentState', {
+    get: () => state,
+    configurable: true,
+  });
+}
 
 const mockUseNativeIOSTabsActive =
   useNativeIOSTabsActive as jest.MockedFunction<typeof useNativeIOSTabsActive>;
@@ -205,6 +221,30 @@ describe('ActiveWorkoutRestBar', () => {
       expect(getByTestId('rest-bar-glass')).toBeTruthy();
       fireEvent.press(getByLabelText('Complete set'));
       expect(props.onCompleteSet).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('countdown lead-in', () => {
+    beforeEach(() => {
+      mockPlayIntervalCue.mockClear();
+      setAppState('active');
+    });
+
+    it('beeps for the last three seconds while the app is on screen', () => {
+      const { rerender, props } = renderBar({ remainingMs: 2_500 });
+      expect(mockPlayIntervalCue).toHaveBeenCalledWith('countdown');
+      rerender(
+        <SafeAreaProvider initialMetrics={{ insets, frame }}>
+          <ActiveWorkoutRestBar {...props} remainingMs={1_500} />
+        </SafeAreaProvider>
+      );
+      expect(mockPlayIntervalCue).toHaveBeenCalledTimes(2);
+    });
+
+    it('stays quiet off screen, leaving the rest-complete chime as the only sound', () => {
+      setAppState('background');
+      renderBar({ remainingMs: 2_500 });
+      expect(mockPlayIntervalCue).not.toHaveBeenCalled();
     });
   });
 });

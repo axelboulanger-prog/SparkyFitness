@@ -19,6 +19,7 @@ import type {
   ExercisePersonalRecordItem,
   MatchedCourseGroup,
 } from '@workspace/shared';
+import { bodyWeightJoinSql, setLoadSql } from '../utils/exerciseLoadSql.js';
 
 interface SqlRow {
   [key: string]: unknown;
@@ -203,10 +204,11 @@ async function getExerciseStatsSummary(
 
     const strengthSql = `
       SELECT 
-        COALESCE(SUM(s.weight * s.reps), 0) as total_volume,
+        COALESCE(SUM(${setLoadSql('e', 's')} * s.reps), 0) as total_volume,
         COALESCE(SUM(s.reps), 0) as total_reps
       FROM public.exercise_entry_sets s
       JOIN public.exercise_entries e ON s.exercise_entry_id = e.id
+      ${bodyWeightJoinSql('e')}
       WHERE e.user_id = $1
         AND e.entry_date >= $2
         AND e.entry_date <= $3
@@ -281,9 +283,10 @@ async function getExerciseStatsSummary(
     const breakdownVolumeSql = `
       SELECT
         DATE_TRUNC('${truncUnit}', e.entry_date) as period_start,
-        COALESCE(SUM(s.weight * s.reps), 0) as total_volume
+        COALESCE(SUM(${setLoadSql('e', 's')} * s.reps), 0) as total_volume
       FROM public.exercise_entry_sets s
       JOIN public.exercise_entries e ON s.exercise_entry_id = e.id
+      ${bodyWeightJoinSql('e')}
       WHERE e.user_id = $1
         AND e.entry_date >= $2
         AND e.entry_date <= $3
@@ -496,7 +499,7 @@ async function queryExerciseActivities(
       // positive distance counts: a synced paddle can reuse a "General"
       // reps-only custom exercise and still carry a route.
       whereClauses.push(`(
-        COALESCE(modality, '') <> 'weight_reps'
+        COALESCE(modality, '') NOT IN ('weight_reps', 'weight_duration', 'weight_distance')
         AND LOWER(COALESCE(category, '')) NOT IN ('strength', 'powerlifting', 'olympic weightlifting', 'strongman')
         AND LOWER(exercise_name) !~* '\\m(strength|crunch|sit-?up|plank)\\M'
         AND (
@@ -858,14 +861,17 @@ async function getPersonalRecordMatrix(
       WITH best_set AS (
         SELECT DISTINCT ON (e.exercise_name)
           e.exercise_name,
-          s.weight * (1 + s.reps / 30.0) as estimated_one_rm,
-          s.weight as weight_kg,
+          (${setLoadSql('e', 's')}) * (1 + s.reps / 30.0) as estimated_one_rm,
+          -- The load moved: body weight plus the set's weight for a
+          -- bodyweight exercise, so a weighted pull-up ranks on what it was.
+          (${setLoadSql('e', 's')}) as weight_kg,
           s.reps as reps,
           e.entry_date as achieved_on
         FROM public.exercise_entry_sets s
         JOIN public.exercise_entries e ON s.exercise_entry_id = e.id
+        ${bodyWeightJoinSql('e')}
         LEFT JOIN public.exercise_preset_entries epe ON epe.id = e.exercise_preset_entry_id
-        WHERE e.user_id = $1 AND s.weight > 0 AND s.reps > 0
+        WHERE e.user_id = $1 AND (${setLoadSql('e', 's')}) > 0 AND s.reps > 0
           -- Sets done inside interval/WOD sessions aren't comparable strength
           -- efforts; ad-hoc entries (no session) count as standard.
           AND COALESCE(epe.workout_format, 'standard') = 'standard'

@@ -53,6 +53,15 @@ import ouraRoutes from '../routes/ouraRoutes.js';
 import ouraIntegrationService from '../integrations/oura/ouraService.js';
 import ouraService from '../services/ouraService.js';
 
+vi.mock('../services/providerSyncClaim.js', async (importActual) => ({
+  ...(await importActual<typeof import('../services/providerSyncClaim.js')>()),
+  startProviderSync: vi.fn(async (_target, sync) => ({ running: sync() })),
+}));
+import {
+  SYNC_ALREADY_RUNNING_RESPONSE,
+  startProviderSync,
+} from '../services/providerSyncClaim.js';
+
 const app = express();
 app.use(express.json());
 app.use('/oura', ouraRoutes);
@@ -94,6 +103,20 @@ describe('POST /oura/callback', () => {
 });
 
 describe('POST /oura/sync', () => {
+  it('answers 409 without syncing while another sync holds the account', async () => {
+    vi.mocked(startProviderSync).mockResolvedValueOnce(null);
+
+    const res = await request(app).post('/oura/sync').send({});
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toEqual(SYNC_ALREADY_RUNNING_RESPONSE);
+    expect(startProviderSync).toHaveBeenCalledWith(
+      { userId: 'user-1', providerType: 'oura' },
+      expect.any(Function)
+    );
+    expect(ouraService.syncOuraData).not.toHaveBeenCalled();
+  });
+
   it('triggers a manual sync with a custom date range', async () => {
     const res = await request(app)
       .post('/oura/sync')

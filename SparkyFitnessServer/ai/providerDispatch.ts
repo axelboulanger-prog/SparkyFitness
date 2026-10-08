@@ -5,6 +5,7 @@ import {
   getDefaultModel,
   getDefaultVisionModel,
   getOpenAiCompatibleBaseUrl,
+  getPerplexityPreset,
 } from './config.js';
 import {
   createGuardedDispatcher,
@@ -528,12 +529,50 @@ function buildOpenAiFamilyRequest(ctx: BuildContext): BuiltRequest {
           { type: 'text', text: prompt },
         ]
       : prompt;
+  const perplexityInput =
+    ctx.images.length > 0
+      ? [
+          {
+            role: 'user',
+            content: [
+              ...ctx.images.map((img) => ({
+                type: 'input_image',
+                image_url: `data:${img.mimeType};base64,${img.base64}`,
+              })),
+              { type: 'input_text', text: prompt },
+            ],
+          },
+        ]
+      : prompt;
+
   const body: Record<string, unknown> = {
     model: ctx.model,
     messages: [{ role: 'user', content }],
-    ...(ctx.provider.service_type === 'perplexity' && { input: content }),
   };
-  if (ctx.temperature !== undefined) {
+
+  if (ctx.provider.service_type === 'perplexity') {
+    delete body.messages;
+    body.input = perplexityInput;
+
+    const preset = getPerplexityPreset(ctx.model);
+    if (preset) {
+      body.preset = preset;
+      delete body.model;
+    } else {
+      body.model = ctx.model;
+      const modelLower = (ctx.model ?? '').toLowerCase();
+      if (
+        modelLower.startsWith('anthropic/') ||
+        modelLower.includes('claude')
+      ) {
+        body.max_output_tokens = 4096;
+      }
+    }
+  }
+  if (
+    ctx.temperature !== undefined &&
+    ctx.provider.service_type !== 'perplexity'
+  ) {
     body.temperature = ctx.temperature;
   }
   if (ctx.jsonSchema) {

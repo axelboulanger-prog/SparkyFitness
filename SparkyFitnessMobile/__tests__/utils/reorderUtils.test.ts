@@ -1,4 +1,4 @@
-import { moveItem } from '../../src/utils/reorderUtils';
+import { moveItem, resolveKeyOrder } from '../../src/utils/reorderUtils';
 
 describe('moveItem', () => {
   test('moves an item forward in the array', () => {
@@ -20,5 +20,25 @@ describe('moveItem', () => {
   test('returns shallow copy unchanged if fromIndex is invalid', () => {
     const list = ['a', 'b', 'c'];
     expect(moveItem(list, 10, 0)).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('resolveKeyOrder', () => {
+  const registry = ['a', 'b', 'c'] as const;
+
+  test('keeps the saved order and appends keys it does not know yet', () => {
+    expect(resolveKeyOrder(['c', 'a'], registry)).toEqual(['c', 'a', 'b']);
+  });
+
+  test('drops unknown keys and duplicates', () => {
+    expect(resolveKeyOrder(['b', 'zzz', 'b', 'a'], registry)).toEqual([
+      'b',
+      'a',
+      'c',
+    ]);
+  });
+
+  test('an empty saved order is the registry order', () => {
+    expect(resolveKeyOrder([], registry)).toEqual(['a', 'b', 'c']);
   });
 });

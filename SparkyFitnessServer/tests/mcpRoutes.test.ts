@@ -15,6 +15,7 @@ import goalService from '../services/goalService.js';
 import userRepository from '../models/userRepository.js';
 import foodEntryService from '../services/foodEntryService.js';
 import foodEntryMealRepository from '../models/foodEntryMealRepository.js';
+import { MCP_TOOL_READ_ACCESS } from '../ai/mcp/toolAccess.js';
 
 // buildChatbotTools loads every domain builder; real foodEntryService trips on
 // a deep '@workspace/shared' subpath import at load and isn't exercised here.
@@ -111,7 +112,10 @@ let testUserRole = 'admin';
 // req.user carries the role so resolveIsAdmin resolves without the DB fallback.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function fakeAuthenticate(req: any, res: any, next: any) {
-  if (req.headers.authorization === 'Bearer valid') {
+  const authz = req.headers.authorization;
+  if (authz === 'Bearer valid' || authz === 'Bearer readonly') {
+    // 'readonly' stands in for a read-only API key (issue #2678).
+    req.apiKeyReadOnly = authz === 'Bearer readonly';
     req.authenticatedUserId = TEST_USER;
     req.userId = TEST_USER;
     req.activeUserId = TEST_USER;
@@ -157,7 +161,7 @@ describe('POST /mcp', () => {
 
     expect(res.status).toBe(200);
     const tools = res.body.result.tools;
-    expect(tools).toHaveLength(51);
+    expect(tools).toHaveLength(52);
     expect(tools.map((t: { name: string }) => t.name).sort()).toEqual(
       EXPECTED_TOOL_NAMES
     );
@@ -512,7 +516,7 @@ describe('POST /mcp', () => {
 
     expect(res.status).toBe(200);
     const names = res.body.result.tools.map((t: { name: string }) => t.name);
-    expect(res.body.result.tools).toHaveLength(51);
+    expect(res.body.result.tools).toHaveLength(52);
     for (const devTool of DEV_TOOL_NAMES) {
       expect(names).not.toContain(devTool);
     }
@@ -530,7 +534,7 @@ describe('POST /mcp', () => {
 
     expect(res.status).toBe(200);
     const names = res.body.result.tools.map((t: { name: string }) => t.name);
-    expect(res.body.result.tools).toHaveLength(56);
+    expect(res.body.result.tools).toHaveLength(57);
     for (const devTool of DEV_TOOL_NAMES) {
       expect(names).toContain(devTool);
     }
@@ -548,7 +552,7 @@ describe('POST /mcp', () => {
 
     expect(res.status).toBe(200);
     const names = res.body.result.tools.map((t: { name: string }) => t.name);
-    expect(res.body.result.tools).toHaveLength(51);
+    expect(res.body.result.tools).toHaveLength(52);
     for (const devTool of DEV_TOOL_NAMES) {
       expect(names).not.toContain(devTool);
     }
@@ -655,5 +659,119 @@ describe('buildDevTools call-time guard', () => {
     const out = await tools.sparky_get_db_stats.execute!({}, EXEC_STUB);
     expect(out).toContain('Database Pool Stats');
     expect(out).toContain('"totalCount": 3');
+  });
+});
+
+describe('POST /mcp with a read-only API key (#2678)', () => {
+  async function listTools(authorization: string) {
+    const res = await request(app)
+      .post('/mcp')
+      .set(MCP_HEADERS)
+      .set('Authorization', authorization)
+      .send({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    expect(res.status).toBe(200);
+    return res.body.result.tools as {
+      name: string;
+      annotations?: { readOnlyHint?: boolean };
+    }[];
+  }
+
+  async function callTool(
+    authorization: string,
+    name: string,
+    args: Record<string, unknown>
+  ) {
+    return request(app)
+      .post('/mcp')
+      .set(MCP_HEADERS)
+      .set('Authorization', authorization)
+      .send({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name, arguments: args },
+      });
+  }
+
+  it('lists only tools that can read, and never a write-only tool', async () => {
+    const names = (await listTools('Bearer readonly')).map((t) => t.name);
+    for (const name of names) {
+      expect(Object.hasOwn(MCP_TOOL_READ_ACCESS, name), name).toBe(true);
+    }
+    expect(names).toContain('sparky_get_food_diary');
+    expect(names).toContain('sparky_manage_food');
+    expect(names).not.toContain('sparky_log_food_photo');
+    expect(names).not.toContain('sparky_daily_checkin_wizard');
+    expect(names.length).toBeLessThan(EXPECTED_TOOL_NAMES.length);
+  });
+
+  it('marks fully read-only tools with readOnlyHint for every key', async () => {
+    for (const authorization of ['Bearer valid', 'Bearer readonly']) {
+      const tools = await listTools(authorization);
+      const byName = new Map(tools.map((t) => [t.name, t]));
+      expect(
+        byName.get('sparky_get_goal_snapshot')?.annotations?.readOnlyHint
+      ).toBe(true);
+      // Mixed tools can write, so they carry no read-only hint.
+      expect(
+        byName.get('sparky_manage_food')?.annotations?.readOnlyHint
+      ).not.toBe(true);
+    }
+    const full = await listTools('Bearer valid');
+    expect(full).toHaveLength(EXPECTED_TOOL_NAMES.length);
+    expect(
+      full.find((t) => t.name === 'sparky_log_food_photo')?.annotations
+        ?.readOnlyHint
+    ).not.toBe(true);
+  });
+
+  it('refuses a write action of a mixed tool with a tool error', async () => {
+    const res = await callTool('Bearer readonly', 'sparky_manage_goals', {
+      action: 'set_goals',
+      calories: 1800,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toContain('READ_ONLY_API_KEY');
+  });
+
+  it('runs a read action of a mixed tool', async () => {
+    vi.mocked(goalService.getUserGoals).mockResolvedValue({ calories: 2000 });
+    const res = await callTool('Bearer readonly', 'sparky_manage_goals', {
+      action: 'get_goals',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.result.content[0].text).not.toContain('READ_ONLY_API_KEY');
+  });
+
+  it('runs a fully read-only tool', async () => {
+    vi.mocked(goalService.getUserGoals).mockResolvedValue({ calories: 2000 });
+    const res = await callTool(
+      'Bearer readonly',
+      'sparky_get_goal_snapshot',
+      {}
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.result.isError).toBeUndefined();
+    expect(goalService.getUserGoals).toHaveBeenCalled();
+  });
+
+  it('does not run a write-only tool', async () => {
+    const res = await callTool('Bearer readonly', 'sparky_log_food_photo', {
+      save_mode: 'one_food',
+    });
+    // Not registered for this key: the SDK answers with an error, never a result.
+    const failed =
+      res.body.error !== undefined || res.body.result?.isError === true;
+    expect(failed).toBe(true);
+  });
+
+  it('leaves write actions alone for a full-access key', async () => {
+    const res = await callTool('Bearer valid', 'sparky_manage_goals', {
+      action: 'set_goals',
+      calories: 1800,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.result.content[0].text).not.toContain('READ_ONLY_API_KEY');
   });
 });

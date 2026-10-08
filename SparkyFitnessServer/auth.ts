@@ -77,6 +77,15 @@ const authPool = new Pool({
   password: process.env.SPARKY_FITNESS_DB_PASSWORD,
   // @ts-expect-error
   port: process.env.SPARKY_FITNESS_DB_PORT || 5432,
+  // pg returns bigint columns as strings, but Better Auth does arithmetic on
+  // them as numbers (rate_limit.last_request, epoch milliseconds); a string
+  // there turns the 429 retry-after into concatenated digits.
+  types: {
+    getTypeParser: (oid: number, format?: 'text' | 'binary') =>
+      oid === pg.types.builtins.INT8
+        ? Number
+        : pg.types.getTypeParser(oid, format),
+  },
 });
 // Better Auth holds this pool instance for the process lifetime, so it cannot be
 // swapped or ended the way poolManager's pools are during a restore. Without a
@@ -310,6 +319,11 @@ const auth = betterAuth({
   // Rate limiting for auth endpoints
   rateLimit: {
     enabled: true,
+    // Counted in the database rather than in memory so that every server
+    // instance enforces one shared limit per client address.
+    storage: 'database',
+    modelName: 'rate_limit',
+    fields: { lastRequest: 'last_request' },
     window: 60,
     max: 100,
     // Credential checks answer 401, which intrusion-detection tooling reads as
@@ -396,6 +410,34 @@ const auth = betterAuth({
     // sitting behind nginx (i.e. the default docker-compose setup).
     // Supersedes the old `trustProxy: true`, which was never a real option.
     trustedProxyHeaders: true,
+    // Client IP detection for Better Auth rate limiting and audit logging.
+    // Better Auth resolves client IP from `ipAddressHeaders`. We prioritize
+    // `x-client-ip` (injected by Express middleware from getClientIp(req),
+    // which honours SPARKY_FITNESS_TRUSTED_PROXY_HOPS and SPARKY_FITNESS_REAL_IP_HEADER).
+    // If SPARKY_FITNESS_TRUSTED_PROXIES is specified, Better Auth also trusts
+    // those CIDR ranges when inspecting multi-hop X-Forwarded-For chains directly.
+    ipAddress: {
+      ipAddressHeaders: [
+        'x-client-ip',
+        ...(process.env.SPARKY_FITNESS_REAL_IP_HEADER?.trim() &&
+        process.env.SPARKY_FITNESS_REAL_IP_HEADER.trim().toLowerCase() !==
+          'x-forwarded-for' &&
+        process.env.SPARKY_FITNESS_REAL_IP_HEADER.trim().toLowerCase() !==
+          'x-client-ip'
+          ? [process.env.SPARKY_FITNESS_REAL_IP_HEADER.trim().toLowerCase()]
+          : []),
+        'x-forwarded-for',
+      ],
+      ...(process.env.SPARKY_FITNESS_TRUSTED_PROXIES?.trim()
+        ? {
+            trustedProxies: process.env.SPARKY_FITNESS_TRUSTED_PROXIES.split(
+              ','
+            )
+              .map((p) => p.trim())
+              .filter(Boolean),
+          }
+        : {}),
+    },
     crossSubDomainCookies: {
       enabled: false,
     },

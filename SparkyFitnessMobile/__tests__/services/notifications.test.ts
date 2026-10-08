@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import * as Haptics from 'expo-haptics';
-import { createAudioPlayer } from 'expo-audio';
+import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import { Alert, AppState, Platform } from 'react-native';
 import Toast from 'react-native-toast-message';
 import {
@@ -21,7 +21,10 @@ import {
   setRestTimerNotificationsEnabled,
 } from '../../src/services/notifications';
 import { ExactAlarmBridge } from '../../src/services/ExactAlarmBridge';
-import { __resetSoundsForTests } from '../../src/services/sounds';
+import {
+  __resetSoundsForTests,
+  setRestKeepAlive,
+} from '../../src/services/sounds';
 import { useAppPreferencesStore } from '../../src/stores/appPreferencesStore';
 import i18n, { initializeI18n } from '../../src/localization/i18n';
 
@@ -248,6 +251,32 @@ describe('notifications service', () => {
       expect(result.shouldShowList).toBe(true);
     });
 
+    it('mutes the ping off screen when the iOS background chime owns the cue', async () => {
+      useAppPreferencesStore.getState().setRestChimeThroughSilent(true);
+      setAppState('inactive');
+      const handler = await getHandler();
+      const result = await handler(notificationWith('rest-complete'));
+      expect(result.shouldPlaySound).toBe(false);
+      expect(result.shouldShowBanner).toBe(true);
+    });
+
+    it('keeps the ping audible off screen when the background chime could not start', async () => {
+      useAppPreferencesStore.getState().setRestChimeThroughSilent(true);
+      (setAudioModeAsync as jest.Mock).mockRejectedValueOnce(
+        new Error('background audio rejected')
+      );
+      try {
+        setRestKeepAlive(true);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        setAppState('inactive');
+        const handler = await getHandler();
+        const result = await handler(notificationWith('rest-complete'));
+        expect(result.shouldPlaySound).toBe(true);
+      } finally {
+        __resetSoundsForTests();
+      }
+    });
+
     it('keeps sound for non-rest notifications regardless of the chime preference', async () => {
       const handler = await getHandler();
       const medReminder = await handler(
@@ -313,6 +342,34 @@ describe('notifications service', () => {
           channelId: 'workout-timer',
         }),
       });
+    });
+
+    it('schedules a silent ping when the iOS background chime is on', async () => {
+      mockGetPerms.mockResolvedValue({ status: 'granted' } as any);
+      mockSchedule.mockResolvedValue('mock-id' as any);
+      useAppPreferencesStore.getState().setRestChimeThroughSilent(true);
+      await scheduleRestNotification('Bench Press', 60);
+      expect(mockSchedule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.objectContaining({ sound: false }),
+        })
+      );
+    });
+
+    it('keeps the ping audible when iOS rejects the background audio mode', async () => {
+      mockGetPerms.mockResolvedValue({ status: 'granted' } as any);
+      mockSchedule.mockResolvedValue('mock-id' as any);
+      useAppPreferencesStore.getState().setRestChimeThroughSilent(true);
+      (setAudioModeAsync as jest.Mock).mockRejectedValueOnce(
+        new Error('background audio rejected')
+      );
+      setRestKeepAlive(true);
+      await scheduleRestNotification('Bench Press', 60);
+      expect(mockSchedule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.objectContaining({ sound: true }),
+        })
+      );
     });
 
     it('sweeps stale delivered rest pings, leaving other notifications alone', async () => {

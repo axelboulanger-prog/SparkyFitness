@@ -1376,8 +1376,15 @@ const selectBasalNormalizedSessionCalories = (
   durationMs: number
 ): number | undefined => {
   const totalValid = isPositiveCalories(total) ? total : undefined;
+  // Without BMR records Health Connect synthesizes the basal aggregate, and it
+  // can come back far above any real resting rate — 512 kcal over a 66-min
+  // Samsung session, turning 606 total into 94 active (#2382). Basal above the
+  // same per-minute BMR cap the Active/Total check uses is ignored.
+  const basalCap = (durationMs / 60_000) * CALORIE_BMR_KCAL_PER_MIN_CAP;
   const basalValid =
-    basal != null && Number.isFinite(basal) && basal >= 0 ? basal : undefined;
+    basal != null && Number.isFinite(basal) && basal >= 0 && basal <= basalCap
+      ? basal
+      : undefined;
   if (totalValid == null || basalValid == null) {
     return selectSessionCalories(active, total, durationMs);
   }

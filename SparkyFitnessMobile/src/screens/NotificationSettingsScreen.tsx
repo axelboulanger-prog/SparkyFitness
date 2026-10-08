@@ -71,6 +71,12 @@ const NotificationSettingsScreen: React.FC<
   const setMedicationReminderHideNames = useAppPreferencesStore(
     (s) => s.setMedicationReminderHideNames
   );
+  const medicationReminderConsolidate = useAppPreferencesStore(
+    (s) => s.medicationReminderConsolidate
+  );
+  const setMedicationReminderConsolidate = useAppPreferencesStore(
+    (s) => s.setMedicationReminderConsolidate
+  );
   const waterReminderEnabled = useAppPreferencesStore(
     (s) => s.waterReminderEnabled
   );
@@ -356,6 +362,31 @@ const NotificationSettingsScreen: React.FC<
                     )}
                     value={medicationReminderHideNames}
                     onValueChange={setMedicationReminderHideNames}
+                  />
+                }
+              />
+            )}
+            {medicationRemindersEnabled && (
+              <SettingsRow
+                title={t('notificationSettings.consolidateReminders', {
+                  defaultValue: 'Consolidate Reminders',
+                })}
+                subtitle={t(
+                  'notificationSettings.consolidateRemindersSubtitle',
+                  {
+                    defaultValue:
+                      'Group medications scheduled for the same time into a single notification.',
+                  }
+                )}
+                subtitleNumberOfLines={0}
+                rightAccessory={
+                  <Switch
+                    accessibilityLabel={t(
+                      'notificationSettings.consolidateReminders',
+                      { defaultValue: 'Consolidate Reminders' }
+                    )}
+                    value={medicationReminderConsolidate}
+                    onValueChange={setMedicationReminderConsolidate}
                   />
                 }
               />

@@ -23,7 +23,13 @@ enum OutboundPayloads {
         static let contextRequest = "requestContext"
         static let setCompleted = "setCompleted"
         static let heartRateBatch = "heartRateBatch"
+        static let liveHeartRate = "liveHeartRate"
         static let workoutStop = "workoutStop"
+        static let workoutDiscard = "workoutDiscard"
+        static let restChanged = "restChanged"
+        static let setTimerStarted = "setTimerStarted"
+        static let setTimerStopped = "setTimerStopped"
+        static let workoutStartRequested = "workoutStartRequested"
     }
 
     /// A morning check-in awaiting a server write.
@@ -67,6 +73,21 @@ enum OutboundPayloads {
     /// Asks the phone to push a fresh context. Carries no data of its own.
     static let contextRequest: [String: Any] = ["type": Kind.contextRequest]
 
+    /// The wearer tapped a saved workout. The phone creates the session and
+    /// arms the watch the same way its own start button does. `serverId` is
+    /// the phone that built the list, so a tap queued across an account
+    /// switch is refused.
+    static func workoutStartRequest(presetId: String, serverId: String?) -> [String: Any] {
+        var payload: [String: Any] = [
+            "type": Kind.workoutStartRequested,
+            "presetId": presetId,
+        ]
+        if let serverId, !serverId.isEmpty {
+            payload["serverId"] = serverId
+        }
+        return payload
+    }
+
     /// One set logged during an active workout, with whatever the wearer
     /// actually did. Delivery must not be lost — unlike a heart-rate sample,
     /// a dropped set is a hole in the diary the wearer would have no way to
@@ -89,6 +110,12 @@ enum OutboundPayloads {
         }
         if let reps = completedSet.reps {
             payload["reps"] = reps
+        }
+        if let duration = completedSet.duration {
+            payload["duration"] = duration
+        }
+        if let distanceKm = completedSet.distanceKm {
+            payload["distanceKm"] = distanceKm
         }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -121,6 +148,24 @@ enum OutboundPayloads {
         return payload
     }
 
+    /// The reading the wrist is showing right now. Only ever sent as a live
+    /// message, never queued: a reading that arrives minutes late describes
+    /// nothing, and the batch carries the same samples for the diary.
+    static func liveHeartRate(
+        sessionId: String,
+        exerciseEntryId: String,
+        bpm: Double,
+        at: Date
+    ) -> [String: Any] {
+        [
+            "type": Kind.liveHeartRate,
+            "sessionId": sessionId,
+            "exerciseEntryId": exerciseEntryId,
+            "bpm": bpm,
+            "at": at.timeIntervalSince1970 * 1000,
+        ]
+    }
+
     /// The wearer ended the workout on the watch. Queued like `setCompleted`:
     /// this is what tells the phone to flush buffered heart rate against the
     /// session's exercise entries, and a phone that misses it entirely would
@@ -130,5 +175,69 @@ enum OutboundPayloads {
             "type": Kind.workoutStop,
             "sessionId": signal.sessionId,
         ]
+    }
+
+    /// The wearer discarded the workout on the watch. Queued like
+    /// `workoutStop`: a phone that never hears it would keep a live session
+    /// the wrist already abandoned. Unlike a stop, no heart rate follows it.
+    static func workoutDiscard(sessionId: String, armedAt: Date?) -> [String: Any] {
+        var payload: [String: Any] = [
+            "type": Kind.workoutDiscard,
+            "sessionId": sessionId,
+        ]
+        if let armedAt {
+            payload["armedAt"] = armedAt.timeIntervalSince1970 * 1000
+        }
+        return payload
+    }
+
+    /// The wearer started a set's hold countdown or stopwatch on the watch.
+    /// `startedAt` is epoch ms; the phone starts its own stopwatch from it so
+    /// both show the same clock.
+    /// `armedAt` is the arm of the plan the timer belongs to, so the phone can
+    /// refuse a queued start from an earlier arm of the same session.
+    static func setTimerStarted(
+        sessionId: String, setId: String, startedAt: Date, armedAt: Date? = nil
+    ) -> [String: Any] {
+        var payload: [String: Any] = [
+            "type": Kind.setTimerStarted,
+            "sessionId": sessionId,
+            "setId": setId,
+            "startedAt": startedAt.timeIntervalSince1970 * 1000,
+        ]
+        if let armedAt { payload["armedAt"] = armedAt.timeIntervalSince1970 * 1000 }
+        return payload
+    }
+
+    /// The wearer stopped a set's stopwatch on the watch. `seconds` is how long
+    /// it ran; `startedAt` is that run's start so a stop queued behind a newer
+    /// run is not applied to it.
+    static func setTimerStopped(
+        sessionId: String, setId: String, seconds: Int, startedAt: Date
+    ) -> [String: Any] {
+        [
+            "type": Kind.setTimerStopped,
+            "sessionId": sessionId,
+            "setId": setId,
+            "seconds": seconds,
+            "startedAt": startedAt.timeIntervalSince1970 * 1000,
+        ]
+    }
+
+    /// The wearer skipped or moved the rest on the watch. Both deadlines are
+    /// epoch ms, the same form the phone sends its own rest in: the phone only
+    /// applies this to a rest still ending at `previousEndsAt`, so a copy that
+    /// arrives twice, or late after that rest is over, changes nothing.
+    /// `endsAt` is omitted when the rest was skipped.
+    static func restChanged(sessionId: String, previousEndsAt: Date, endsAt: Date?) -> [String: Any] {
+        var payload: [String: Any] = [
+            "type": Kind.restChanged,
+            "sessionId": sessionId,
+            "previousEndsAt": previousEndsAt.timeIntervalSince1970 * 1000,
+        ]
+        if let endsAt {
+            payload["endsAt"] = endsAt.timeIntervalSince1970 * 1000
+        }
+        return payload
     }
 }

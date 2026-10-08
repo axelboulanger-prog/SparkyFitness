@@ -4,11 +4,17 @@ import request from 'supertest';
 import express from 'express';
 import fastingRoutes from '../routes/fastingRoutes.js';
 import fastingRepository from '../models/fastingRepository.js';
+import fastingPreferencesRepository from '../models/fastingPreferencesRepository.js';
+import fastingAutoCalculationService from '../services/fastingAutoCalculationService.js';
 
 // Mock repositories and middleware
 vi.mock('../models/fastingRepository.js');
+vi.mock('../models/fastingPreferencesRepository.js');
+vi.mock('../services/fastingAutoCalculationService.js');
 vi.mock('../models/moodRepository.js');
-vi.mock('../utils/timezoneLoader.js');
+vi.mock('../utils/timezoneLoader.js', () => ({
+  loadUserTimezone: vi.fn().mockResolvedValue('UTC'),
+}));
 
 vi.mock('../middleware/authMiddleware.js', () => ({
   authenticate: vi.fn((req, res, next) => {
@@ -170,6 +176,81 @@ describe('Fasting Routes', () => {
 
       expect(res.statusCode).toEqual(404);
       expect(res.body.error).toContain('Fast not found');
+    });
+  });
+
+  describe('Fasting Preferences & Auto Calculation', () => {
+    it('GET /fasting/preferences should return preferences', async () => {
+      const mockPrefs = {
+        user_id: 'testUserId',
+        auto_calculate: true,
+        default_protocol: '16-8',
+        target_fasting_hours: 16,
+        target_eating_hours: 8,
+        calorie_threshold: 10,
+        pre_end_alert_minutes: 30,
+        eating_window_alert: false,
+      };
+
+      // @ts-expect-error TS(2339)
+      fastingPreferencesRepository.getFastingPreferences.mockResolvedValue(
+        mockPrefs
+      );
+
+      const res = await request(app).get('/fasting/preferences');
+      expect(res.statusCode).toEqual(200);
+      expect(res.body).toEqual(mockPrefs);
+    });
+
+    it('PUT /fasting/preferences should update and return preferences', async () => {
+      const updatedPrefs = {
+        user_id: 'testUserId',
+        auto_calculate: true,
+        default_protocol: '18-6',
+        target_fasting_hours: 18,
+        target_eating_hours: 6,
+        calorie_threshold: 15,
+        pre_end_alert_minutes: 30,
+        eating_window_alert: true,
+      };
+
+      // @ts-expect-error TS(2339)
+      fastingPreferencesRepository.upsertFastingPreferences.mockResolvedValue(
+        updatedPrefs
+      );
+
+      const res = await request(app)
+        .put('/fasting/preferences')
+        .send(updatedPrefs);
+      expect(res.statusCode).toEqual(200);
+      expect(res.body).toEqual(updatedPrefs);
+    });
+
+    it('GET /fasting/calculated should return calculated history', async () => {
+      const mockCalculated = [
+        {
+          id: 'auto-1',
+          user_id: 'testUserId',
+          start_time: '2026-10-02T19:00:00.000Z',
+          end_time: '2026-10-03T11:00:00.000Z',
+          target_end_time: '2026-10-03T11:00:00.000Z',
+          duration_minutes: 960,
+          fasting_type: '16:8 Leangains',
+          status: 'COMPLETED',
+          is_auto_calculated: true,
+        },
+      ];
+
+      // @ts-expect-error TS(2339)
+      fastingAutoCalculationService.getCalculatedFastingHistory.mockResolvedValue(
+        mockCalculated
+      );
+
+      const res = await request(app).get(
+        '/fasting/calculated?startDate=2026-10-01&endDate=2026-10-03'
+      );
+      expect(res.statusCode).toEqual(200);
+      expect(res.body).toEqual(mockCalculated);
     });
   });
 });

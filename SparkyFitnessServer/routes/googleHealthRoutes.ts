@@ -9,6 +9,10 @@ import {
   CallbackBodySchema,
   SyncBodySchema,
 } from '../schemas/googleHealthSchemas.js';
+import {
+  startProviderSync,
+  SYNC_ALREADY_RUNNING_RESPONSE,
+} from '../services/providerSyncClaim.js';
 
 const router = express.Router();
 
@@ -147,21 +151,29 @@ router.post(
         'info',
         `[googleHealthRoutes] Manual sync triggered for user ${userId}${startDate ? ` from ${startDate}` : ''}${endDate ? ` to ${endDate}` : ''}`
       );
-      googleHealthService
-        .syncGoogleHealthData(
-          userId,
-          'manual',
-          startDate,
-          endDate,
-          dataSource,
-          saveMockData
-        )
-        .catch((err: Error) => {
-          log(
-            'error',
-            `Background Google Health sync failed for user ${userId}: ${err.message}`
-          );
-        });
+      const started = await startProviderSync(
+        { userId, providerType: 'googlehealth' },
+        () =>
+          googleHealthService.syncGoogleHealthData(
+            userId,
+            'manual',
+            startDate,
+            endDate,
+            dataSource,
+            saveMockData
+          )
+      );
+      if (!started) {
+        res.status(409).json(SYNC_ALREADY_RUNNING_RESPONSE);
+        return;
+      }
+      // Replies before the sync finishes; the claim is held until it does.
+      started.running.catch((err: Error) => {
+        log(
+          'error',
+          `Background Google Health sync failed for user ${userId}: ${err.message}`
+        );
+      });
       res.status(202).json({ message: 'Google Health sync started.' });
     } catch (error) {
       log(

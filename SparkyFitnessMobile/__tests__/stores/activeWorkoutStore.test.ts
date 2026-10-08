@@ -1659,6 +1659,45 @@ describe('activeWorkoutStore', () => {
     });
   });
 
+  describe('rest-chime setting changed mid-rest', () => {
+    beforeEach(async () => {
+      useActiveWorkoutStore.getState().startWorkout(makeSession());
+      mockSchedule.mockResolvedValueOnce('notif-initial');
+      useActiveWorkoutStore.getState().completeActiveSet(); // rest 60s before set 102
+      await flushPromises();
+    });
+
+    it('reschedules the running rest notification for the time left', async () => {
+      jest.setSystemTime(new Date(FIXED_NOW + 20_000)); // 40s remaining
+      mockCancel.mockClear();
+      mockSchedule.mockClear();
+      mockSchedule.mockResolvedValueOnce('notif-rescheduled');
+
+      useAppPreferencesStore.getState().setRestChimeThroughSilent(true);
+
+      expect(mockCancel).toHaveBeenCalledWith('notif-initial');
+      expect(mockSchedule).toHaveBeenLastCalledWith(
+        'Bench Press',
+        40,
+        expect.anything()
+      );
+      const { rest } = useActiveWorkoutStore.getState();
+      expect(rest.state).toBe('resting');
+      expect(rest.endsAt).toBe(FIXED_NOW + 60_000);
+      await flushPromises();
+      expect(
+        useActiveWorkoutStore.getState().rest.scheduledNotificationId
+      ).toBe('notif-rescheduled');
+    });
+
+    it('leaves a finished rest alone', () => {
+      useActiveWorkoutStore.getState().dismissRest();
+      mockSchedule.mockClear();
+      useAppPreferencesStore.getState().setRestChimeThroughSilent(true);
+      expect(mockSchedule).not.toHaveBeenCalled();
+    });
+  });
+
   describe('adjustRest', () => {
     beforeEach(async () => {
       useActiveWorkoutStore.getState().startWorkout(makeSession());

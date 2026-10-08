@@ -13,6 +13,7 @@ import {
   type SleepTimelineSummary,
 } from '../types/sleep';
 import { addDays, getTodayDate } from '../utils/dateUtils';
+import { average } from '../utils/mathUtils';
 import { resolveSleepZone } from '../utils/sleepDay';
 import { selectMainSleep } from '../utils/sleepSessions';
 import { sleepRangeQueryKey } from './queryKeys';
@@ -100,12 +101,6 @@ const buildSessionSegments = (entry: SleepEntry): SleepTimelineSegment[] => {
   if (Number.isNaN(startMs) || Number.isNaN(endMs)) return [];
 
   return [{ stage: 'other', startMs, endMs }];
-};
-
-const average = (values: number[]): number | null => {
-  if (values.length === 0) return null;
-
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
 };
 
 const groupEntriesByDay = (

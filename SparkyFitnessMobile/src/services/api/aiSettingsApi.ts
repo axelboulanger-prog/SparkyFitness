@@ -61,9 +61,12 @@ export async function fetchUserAiConfigAllowed(): Promise<boolean> {
   }
 }
 
-// Returns `null` when nothing is configured or any failure occurs — never
-// throws, so callers can gate UI without a try/catch.
-export async function fetchActiveAiServiceSetting(): Promise<ActiveAiServiceSetting | null> {
+// Returns `null` when nothing is configured. Request failures return `null`
+// too, unless `throwOnFailure` is set, so a screen can tell "none" from
+// "the request failed". Other callers keep gating UI without a try/catch.
+export async function fetchActiveAiServiceSetting(options?: {
+  throwOnFailure?: boolean;
+}): Promise<ActiveAiServiceSetting | null> {
   const config = await getActiveServerConfig();
   if (!config) return null;
 
@@ -93,6 +96,9 @@ export async function fetchActiveAiServiceSetting(): Promise<ActiveAiServiceSett
         `[AI Settings] Active setting fetch failed: ${response.status}`,
         'WARNING'
       );
+      if (options?.throwOnFailure) {
+        throw new Error(`Active AI setting fetch failed: ${response.status}`);
+      }
       return null;
     }
     if (
@@ -107,6 +113,7 @@ export async function fetchActiveAiServiceSetting(): Promise<ActiveAiServiceSett
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     addLog(`[AI Settings] Active setting fetch error: ${message}`, 'WARNING');
+    if (options?.throwOnFailure) throw error;
     return null;
   }
 }

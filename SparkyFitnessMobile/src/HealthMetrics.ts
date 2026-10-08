@@ -502,6 +502,22 @@ const ALL_HEALTH_METRICS: HealthMetric[] = [
     category: 'Body Measurements',
   },
   {
+    // Health Connect only. Sent in kg; the server converts it to
+    // body_water_percentage with the same day's weight.
+    id: 'bodyWaterMass',
+    labelKey: 'healthMetrics.bodyWaterMass',
+    defaultLabel: 'Body Water Mass',
+    stateKey: 'isBodyWaterMassSyncEnabled',
+    preferenceKey: 'syncBodyWaterMassEnabled',
+    recordType: 'BodyWaterMass',
+    unit: 'kg',
+    icon: require('../assets/icons/health-metrics/hydration.png'),
+    permissions: [{ accessType: 'read', recordType: 'BodyWaterMass' }],
+    type: 'body_water_mass',
+    platforms: ['android'],
+    category: 'Body Measurements',
+  },
+  {
     id: 'cervicalMucus',
     labelKey: 'healthMetrics.cervicalMucus',
     defaultLabel: 'Cervical Mucus',
@@ -1173,6 +1189,10 @@ export function getHealthMetricLabel(
       });
     case 'boneMass':
       return t('healthMetrics.boneMass', { defaultValue: 'Bone Mass' });
+    case 'bodyWaterMass':
+      return t('healthMetrics.bodyWaterMass', {
+        defaultValue: 'Body Water Mass',
+      });
     case 'cervicalMucus':
       return t('healthMetrics.cervicalMucus', {
         defaultValue: 'Cervical Mucus',

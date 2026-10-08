@@ -128,7 +128,9 @@ Quick reference of all tables by domain and purpose. For detailed security tier,
 | Table | Purpose |
 |-------|---------|
 | `fasting_logs` | Fasting timeline logs (start/end fast) |
+| `user_fasting_preferences` | Intermittent fasting targets, auto-calculation config, and alert timing |
 | `mood_entries` | Logged mood and energy levels |
+| `mindfulness_sessions` | Logged mindfulness, meditation, and breathwork sessions |
 | `user_custom_moods` | User-defined mood tags (icon/color) |
 | `medications` | Custom medication inventory lists |
 | `medication_schedules` | Reminders and schedules for medications |
@@ -136,8 +138,12 @@ Quick reference of all tables by domain and purpose. For detailed security tier,
 | `medication_pens` | Trackers for medication delivery pens |
 | `medication_titration_steps` | Automated titration dosage plans |
 | `injection_entries` | Injection logs (site, time, etc.) |
-| `user_custom_symptoms` | Custom tracked health symptoms |
-| `symptom_entries` | Logs of daily tracked symptom severity |
+| `user_custom_symptoms` | Symptom definitions (template, sections, custom fields) |
+| `symptom_entries` | Symptom quick logs and episodes (also holds cycle-hub symptoms, `source = 'cycle'`) |
+| `user_symptom_options` | Pick-list library: locations, qualities, associated symptoms, triggers, relief methods |
+| `symptom_entry_treatments` | Medications and relief methods used for a symptom entry, with effectiveness |
+| `symptom_entry_photos` | Photos attached to a symptom entry |
+| `symptom_free_days` | Explicit "no symptoms today" markers |
 
 ### Cycle & Pregnancy (Tier 1: Owner-Only)
 | Table | Purpose |
@@ -183,10 +189,11 @@ Quick reference of all tables by domain and purpose. For detailed security tier,
 | `global_settings` | Application feature flags and config |
 | `sso_provider` | Active Single Sign-On providers |
 | `oidc_providers` | OpenID Connect integration settings |
-| `external_provider_types` | Search provider configurations (FatSecret, USDA) |
+| `external_provider_types` | Search provider configurations (FatSecret, USDA, Canadian Nutrient File) |
 | `external_data_providers` | Configured API integration credentials, including personal or global Open Food Facts accounts |
 | `openfoodfacts_product_read_rate_limit` | Singleton lease and cooldown coordinating Open Food Facts product reads across server instances |
 | `openfoodfacts_sync_queue` | Dormant revision-aware automatic upload state and retained history; unused by manual contributions |
+| `rate_limit` | Sign-in rate limit counters shared across server instances |
 | `medication_types` | Medication categories lookup |
 | `medication_route_types` | Medication administration routes lookup |
 | `medication_schedule_types` | Medication scheduling frequencies lookup |

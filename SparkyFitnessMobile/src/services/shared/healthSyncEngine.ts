@@ -212,11 +212,21 @@ const collectMetric = async (
   // (lastSynced − 6h) can fall mid-day, and aggregating that slice would
   // replace the server's real full-day values with partial-window ones
   // (e.g. heart_rate_min losing the overnight low).
+  //
+  // Workouts need the same: the server replaces a source's workouts for every
+  // day an upload touches, keeping only the ones re-sent. A window that starts
+  // mid-day would send just the newer workouts of that day and the server would
+  // delete the earlier ones (a morning workout vanished after an afternoon
+  // background sync).
   const readStart =
     metric.aggregationStrategy != null ||
     (waterFallbackToSum && metric.type === 'water')
       ? windows.aggregatedStart
-      : rawStart;
+      : metric.id === 'exerciseSession'
+        ? new Date(
+            Math.min(windows.aggregatedStart.getTime(), rawStart.getTime())
+          )
+        : rawStart;
 
   const result = await provider.readRaw(
     metric.recordType,

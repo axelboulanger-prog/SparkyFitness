@@ -18,6 +18,10 @@ export interface FastingLog {
   status: 'ACTIVE' | 'COMPLETED' | 'CANCELLED' | null;
   created_at: string | null;
   updated_at: string | null;
+  is_auto_calculated?: boolean;
+  start_meal_name?: string;
+  is_eating_window?: boolean;
+  eating_window_remaining_minutes?: number;
 }
 
 /**

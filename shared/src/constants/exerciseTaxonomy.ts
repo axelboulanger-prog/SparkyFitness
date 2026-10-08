@@ -142,6 +142,14 @@ const EQUIPMENT_SYNONYMS: Record<string, CanonicalEquipment> = {
 // every bench exercise look like the same equipment.
 const IGNORED_EQUIPMENT = new Set(["bench", "incline bench", "decline bench"]);
 
+/** A bench says nothing about the load, so modality derivation skips it. */
+export function isIgnoredEquipment(
+  value: string | null | undefined,
+): boolean {
+  if (!value) return false;
+  return IGNORED_EQUIPMENT.has(clean(value));
+}
+
 function clean(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }

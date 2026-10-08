@@ -149,10 +149,12 @@ export function useActiveWorkoutBarPadding(
 
 /**
  * Routes where the HUD should be hidden — either modal entry flows (food /
- * exercise search), full-screen editors and planning flows with sticky bottom
- * controls (WorkoutAdd, ActivityAdd, MealPlans, MealPlanForm), the chat screen
- * whose composer is pinned to the bottom — all of which would collide with the
- * bar — or the active-workout screen itself, which is the surface the HUD opens.
+ * exercise search), full-screen editors and planning flows with a sticky
+ * FooterSaveBar/FooterActionBar bottom action (WorkoutAdd, ActivityAdd,
+ * MealPlans, MealPlanForm, MealAdd, CycleLogModal, WaterContainerEdit,
+ * WaterContainers), the chat screen whose composer is pinned to the bottom —
+ * all of which would collide with the bar — or the active-workout screen
+ * itself, which is the surface the HUD opens.
  */
 const HIDDEN_ROUTES = new Set<string>([
   'FoodSearch',
@@ -168,6 +170,10 @@ const HIDDEN_ROUTES = new Set<string>([
   'ActivityAdd',
   'MealPlans',
   'MealPlanForm',
+  'MealAdd',
+  'CycleLogModal',
+  'WaterContainerEdit',
+  'WaterContainers',
   'MeasurementsAdd',
   'Chat',
   'ActiveWorkout',
@@ -586,7 +592,10 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
               defaultValue: 'Discard anyway',
             }),
             style: 'destructive',
-            onPress: () => useActiveWorkoutStore.getState().clearWorkout(),
+            onPress: () =>
+              useActiveWorkoutStore
+                .getState()
+                .clearWorkout({ discarded: true }),
           },
         ]
       );
@@ -619,7 +628,9 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
             text: t('workout.discard', { defaultValue: 'Discard' }),
             style: 'destructive',
             onPress: () => {
-              useActiveWorkoutStore.getState().clearWorkout();
+              useActiveWorkoutStore
+                .getState()
+                .clearWorkout({ discarded: true });
               deleteWorkout(sessionId)
                 .then(() => {
                   if (entryDate != null)

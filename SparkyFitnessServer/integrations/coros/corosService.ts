@@ -7,6 +7,7 @@ import { encrypt, decrypt, ENCRYPTION_KEY } from '../../security/encryption.js';
 import { log } from '../../config/logging.js';
 import { logRawResponse } from '../../utils/diagnosticLogger.js';
 import { claimOAuthState, persistOAuthState } from '../../utils/oauthState.js';
+import { withProviderTokenLock } from '../../models/externalProviderRepository.js';
 import {
   COROS_PROVIDER_TYPE,
   COROS_SCOPE,
@@ -386,172 +387,180 @@ export async function refreshAccessToken(
   const refreshPromise = (async () => {
     const client = await getSystemClient();
     try {
-      const rowRes = await client.query(
-        `SELECT id, base_url, encrypted_app_id, app_id_iv, app_id_tag,
+      return await withProviderTokenLock(client, async () => {
+        const rowRes = await client.query(
+          `SELECT id, base_url, encrypted_app_id, app_id_iv, app_id_tag,
                 encrypted_refresh_token, refresh_token_iv, refresh_token_tag
          FROM external_data_providers
-         WHERE id = $1 AND user_id = $2`,
-        [providerId, userId]
-      );
-      const row = rowRes.rows[0] as
-        | {
-            id: string;
-            base_url: string | null;
-            encrypted_app_id: string | null;
-            app_id_iv: string | null;
-            app_id_tag: string | null;
-            encrypted_refresh_token: string | null;
-            refresh_token_iv: string | null;
-            refresh_token_tag: string | null;
-          }
-        | undefined;
+         WHERE id = $1 AND user_id = $2
+         FOR UPDATE`,
+          [providerId, userId]
+        );
+        const row = rowRes.rows[0] as
+          | {
+              id: string;
+              base_url: string | null;
+              encrypted_app_id: string | null;
+              app_id_iv: string | null;
+              app_id_tag: string | null;
+              encrypted_refresh_token: string | null;
+              refresh_token_iv: string | null;
+              refresh_token_tag: string | null;
+            }
+          | undefined;
 
-      if (!row) {
-        throw new Error(`Provider ${providerId} not found for user ${userId}`);
-      }
+        if (!row) {
+          throw new Error(
+            `Provider ${providerId} not found for user ${userId}`
+          );
+        }
 
-      const mcpUrl = resolveCorosMcpUrl(row.base_url);
-      const issuer = corosIssuerFromMcpUrl(mcpUrl);
+        const mcpUrl = resolveCorosMcpUrl(row.base_url);
+        const issuer = corosIssuerFromMcpUrl(mcpUrl);
 
-      let clientId: string;
-      if (row.encrypted_app_id && row.app_id_iv && row.app_id_tag) {
-        clientId =
+        let clientId: string;
+        if (row.encrypted_app_id && row.app_id_iv && row.app_id_tag) {
+          clientId =
+            (await decrypt(
+              row.encrypted_app_id,
+              row.app_id_iv,
+              row.app_id_tag,
+              ENCRYPTION_KEY
+            )) || '';
+        } else {
+          // Re-register client
+          const redirectUri = getCorosRedirectUri();
+          clientId = await registerClient(issuer, redirectUri);
+          const enc = await encrypt(clientId, ENCRYPTION_KEY);
+          await client.query(
+            'UPDATE external_data_providers SET encrypted_app_id = $1, app_id_iv = $2, app_id_tag = $3 WHERE id = $4',
+            [enc.encryptedText, enc.iv, enc.tag, providerId]
+          );
+        }
+
+        if (
+          !row.encrypted_refresh_token ||
+          !row.refresh_token_iv ||
+          !row.refresh_token_tag
+        ) {
+          throw new CorosReauthRequiredError(
+            'No refresh token available. Re-authorization required.'
+          );
+        }
+
+        const refreshToken =
           (await decrypt(
-            row.encrypted_app_id,
-            row.app_id_iv,
-            row.app_id_tag,
+            row.encrypted_refresh_token,
+            row.refresh_token_iv,
+            row.refresh_token_tag,
             ENCRYPTION_KEY
           )) || '';
-      } else {
-        // Re-register client
-        const redirectUri = getCorosRedirectUri();
-        clientId = await registerClient(issuer, redirectUri);
-        const enc = await encrypt(clientId, ENCRYPTION_KEY);
-        await client.query(
-          'UPDATE external_data_providers SET encrypted_app_id = $1, app_id_iv = $2, app_id_tag = $3 WHERE id = $4',
-          [enc.encryptedText, enc.iv, enc.tag, providerId]
-        );
-      }
 
-      if (
-        !row.encrypted_refresh_token ||
-        !row.refresh_token_iv ||
-        !row.refresh_token_tag
-      ) {
-        throw new CorosReauthRequiredError(
-          'No refresh token available. Re-authorization required.'
-        );
-      }
+        const tokenUrl = `${issuer}/oauth2/token`;
+        const bodyParams = new URLSearchParams({
+          grant_type: 'refresh_token',
+          client_id: clientId,
+          refresh_token: refreshToken,
+        });
 
-      const refreshToken =
-        (await decrypt(
-          row.encrypted_refresh_token,
-          row.refresh_token_iv,
-          row.refresh_token_tag,
-          ENCRYPTION_KEY
-        )) || '';
+        let tokenResponse;
+        try {
+          tokenResponse = await axios.post<CorosTokenResponse>(
+            tokenUrl,
+            bodyParams.toString(),
+            {
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                Accept: 'application/json',
+              },
+            }
+          );
+        } catch (error: unknown) {
+          if (axios.isAxiosError(error) && error.response) {
+            const status = error.response.status;
+            const errData = error.response.data as
+              { error?: string } | undefined;
+            const isDefinitiveAuthError =
+              status === 401 ||
+              errData?.error === 'invalid_grant' ||
+              errData?.error === 'invalid_token' ||
+              errData?.error === 'invalid_client';
 
-      const tokenUrl = `${issuer}/oauth2/token`;
-      const bodyParams = new URLSearchParams({
-        grant_type: 'refresh_token',
-        client_id: clientId,
-        refresh_token: refreshToken,
-      });
-
-      let tokenResponse;
-      try {
-        tokenResponse = await axios.post<CorosTokenResponse>(
-          tokenUrl,
-          bodyParams.toString(),
-          {
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              Accept: 'application/json',
-            },
-          }
-        );
-      } catch (error: unknown) {
-        if (axios.isAxiosError(error) && error.response) {
-          const status = error.response.status;
-          const errData = error.response.data as { error?: string } | undefined;
-          const isDefinitiveAuthError =
-            status === 401 ||
-            errData?.error === 'invalid_grant' ||
-            errData?.error === 'invalid_token' ||
-            errData?.error === 'invalid_client';
-
-          if (isDefinitiveAuthError) {
-            log(
-              'warn',
-              `COROS token refresh rejected for user ${userId}: ${errData?.error || status}`
-            );
-            // Clear token columns but preserve row
-            await client.query(
-              `UPDATE external_data_providers
+            if (isDefinitiveAuthError) {
+              log(
+                'warn',
+                `COROS token refresh rejected for user ${userId}: ${errData?.error || status}`
+              );
+              // Clear token columns but preserve row
+              await client.query(
+                `UPDATE external_data_providers
                SET encrypted_access_token = NULL, access_token_iv = NULL, access_token_tag = NULL,
                    encrypted_refresh_token = NULL, refresh_token_iv = NULL, refresh_token_tag = NULL,
                    token_expires_at = NULL, external_user_id = NULL, updated_at = NOW()
                WHERE id = $1`,
-              [providerId]
-            );
-            throw new CorosReauthRequiredError(
-              'Your COROS connection has expired. Click Connect to sign in again.'
-            );
+                [providerId]
+              );
+              throw new CorosReauthRequiredError(
+                'Your COROS connection has expired. Click Connect to sign in again.'
+              );
+            }
           }
+          throw error;
         }
-        throw error;
-      }
 
-      const {
-        access_token,
-        refresh_token: newRefreshToken,
-        expires_in,
-      } = tokenResponse.data;
-      if (!access_token) {
-        throw new Error('COROS refresh response did not include access_token');
-      }
+        const {
+          access_token,
+          refresh_token: newRefreshToken,
+          expires_in,
+        } = tokenResponse.data;
+        if (!access_token) {
+          throw new Error(
+            'COROS refresh response did not include access_token'
+          );
+        }
 
-      const encAccess = await encrypt(access_token, ENCRYPTION_KEY);
-      const encRefresh = newRefreshToken
-        ? await encrypt(newRefreshToken, ENCRYPTION_KEY)
-        : null;
-      const expiresAt = new Date(Date.now() + (expires_in ?? 2591999) * 1000);
+        const encAccess = await encrypt(access_token, ENCRYPTION_KEY);
+        const encRefresh = newRefreshToken
+          ? await encrypt(newRefreshToken, ENCRYPTION_KEY)
+          : null;
+        const expiresAt = new Date(Date.now() + (expires_in ?? 2591999) * 1000);
 
-      if (encRefresh) {
-        await client.query(
-          `UPDATE external_data_providers
+        if (encRefresh) {
+          await client.query(
+            `UPDATE external_data_providers
            SET encrypted_access_token = $1, access_token_iv = $2, access_token_tag = $3,
                encrypted_refresh_token = $4, refresh_token_iv = $5, refresh_token_tag = $6,
                token_expires_at = $7, updated_at = NOW()
            WHERE id = $8`,
-          [
-            encAccess.encryptedText,
-            encAccess.iv,
-            encAccess.tag,
-            encRefresh.encryptedText,
-            encRefresh.iv,
-            encRefresh.tag,
-            expiresAt,
-            providerId,
-          ]
-        );
-      } else {
-        await client.query(
-          `UPDATE external_data_providers
+            [
+              encAccess.encryptedText,
+              encAccess.iv,
+              encAccess.tag,
+              encRefresh.encryptedText,
+              encRefresh.iv,
+              encRefresh.tag,
+              expiresAt,
+              providerId,
+            ]
+          );
+        } else {
+          await client.query(
+            `UPDATE external_data_providers
            SET encrypted_access_token = $1, access_token_iv = $2, access_token_tag = $3,
                token_expires_at = $4, updated_at = NOW()
            WHERE id = $5`,
-          [
-            encAccess.encryptedText,
-            encAccess.iv,
-            encAccess.tag,
-            expiresAt,
-            providerId,
-          ]
-        );
-      }
+            [
+              encAccess.encryptedText,
+              encAccess.iv,
+              encAccess.tag,
+              expiresAt,
+              providerId,
+            ]
+          );
+        }
 
-      return access_token;
+        return access_token;
+      });
     } finally {
       client.release();
     }

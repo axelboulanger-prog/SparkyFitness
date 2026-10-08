@@ -293,7 +293,9 @@ describe('exerciseStatsService', () => {
       });
 
       const sql = String(mockClient.query.mock.calls[0]?.[0]);
-      expect(sql).toContain("<> 'weight_reps'");
+      expect(sql).toContain(
+        "NOT IN ('weight_reps', 'weight_duration', 'weight_distance')"
+      );
       expect(sql).toContain('\\m(strength|crunch');
       expect(sql).not.toContain('(run|walk|cycle');
       expect(sql).toContain('OR COALESCE(distance, 0) > 0');

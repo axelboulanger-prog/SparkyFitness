@@ -137,6 +137,8 @@ export interface TransformedExerciseSession extends RecordTimezoneMetadata {
   raw_data?: unknown;
   sets?: ExerciseSet[];
   source_id?: string;
+  /** Activity type identifier for stable exercise library matching (e.g. HKWorkoutActivityType / Health Connect exerciseType). */
+  exercise_source_id?: string;
   /**
    * Wearable telemetry (X-Workout-Model-Version 3+). All optional so an older
    * server drops the fields it does not know, and a newer server still accepts

@@ -62,6 +62,7 @@ function renderAddSheet(
     onBarcodeScan: jest.fn(),
     onAddMeasurements: jest.fn(),
     onAddProgressPhotos: jest.fn(),
+    onAddSymptoms: jest.fn(),
     onAskSparky: jest.fn(),
     ...overrides,
   };
@@ -166,6 +167,22 @@ describe('AddSheet', () => {
     act(() => mockBottomSheetControls.onDismiss?.());
 
     expect(onSyncHealthData).toHaveBeenCalledTimes(1);
+    expect(onDismissWithoutAction).not.toHaveBeenCalled();
+  });
+
+  it('invokes onAddSymptoms when the secondary Symptoms row is pressed', () => {
+    const onAddSymptoms = jest.fn();
+    const onDismissWithoutAction = jest.fn();
+    const { ref, getByText } = renderAddSheet({
+      onAddSymptoms,
+      onDismissWithoutAction,
+    });
+
+    act(() => ref.current?.present());
+    fireEvent.press(getByText('Symptoms'));
+    act(() => mockBottomSheetControls.onDismiss?.());
+
+    expect(onAddSymptoms).toHaveBeenCalledTimes(1);
     expect(onDismissWithoutAction).not.toHaveBeenCalled();
   });
 

@@ -40,6 +40,24 @@ struct MacroGoal: Codable, Equatable {
     var hasGoal: Bool { goal > 0 }
 }
 
+/// One row of the Goals page, as the phone's Settings → Apple Watch lists it:
+/// any nutrient, not just the three macros. Built on the phone from the same
+/// summary as the calorie figures, so the two never disagree.
+struct NutrientRow: Codable, Equatable, Identifiable {
+    /// The phone's nutrient key (`protein`, `dietary_fiber`, …) or a custom
+    /// nutrient's name. Picks the row's colour.
+    let key: String
+    let label: String
+    let unit: String
+    let consumed: Double
+    /// Nil when no goal is set: the row shows the amount alone.
+    let goal: Double?
+    /// Clamped 0...1 by the phone; 0 without a goal.
+    let progress: Double
+
+    var id: String { key }
+}
+
 /// Today's nutrition, mirrored from the phone's Dashboard for the Goals page.
 ///
 /// Arrives as flat keys in the context payload and is reassembled here (see
@@ -60,6 +78,10 @@ struct NutritionSnapshot: Codable, Equatable {
     let carbs: MacroGoal
     let fat: MacroGoal
     let protein: MacroGoal
+    /// The rows to list under the ring, in order. Nil from a phone build that
+    /// doesn't send them, which keeps the fixed protein, carbs and fat rows;
+    /// empty means the wearer chose to list none.
+    var rows: [NutrientRow]? = nil
 
     var isToday: Bool { day == CheckInDate.today() }
 }
@@ -175,6 +197,24 @@ struct PendingWaterTap: Codable, Equatable, Identifiable {
     var isToday: Bool { day == CheckInDate.today() }
 }
 
+/// A delete the wearer has confirmed but the phone hasn't written yet.
+///
+/// The sibling of `PendingWaterTap`, and for the same reason: the only record
+/// that a delete happened used to be a `@State` set inside the log view, which
+/// died when the page went away and was never resent. A lost delete simply
+/// undid itself on the next push.
+struct PendingWaterDelete: Codable, Equatable, Identifiable {
+    /// The `clientId` the phone acknowledges — not the row being deleted.
+    let id: String
+    /// The `water_intake_entries` row this removes.
+    let entryId: String
+    let createdAt: Date
+    let day: String
+    var state: SyncState = .queued
+
+    var isToday: Bool { day == CheckInDate.today() }
+}
+
 /// One container tap captured on the watch, sent straight to the phone. There
 /// is no queued/saved/failed state kept for these on the watch the way there
 /// is for `CheckIn` — see `WatchSessionManager.sendWaterTap`.
@@ -190,6 +230,28 @@ struct WaterTap: Codable, Equatable {
 struct WaterDeleteRequest: Codable, Equatable {
     let id: String
     let entryId: String
+}
+
+/// A saved workout the wearer can start from the wrist. The phone still
+/// creates the session; this is only the name to tap.
+struct StartableWorkout: Codable, Equatable, Identifiable {
+    let presetId: String
+    let name: String
+
+    var id: String { presetId }
+}
+
+/// A workout the active plans put on today, shown first on the workout page.
+/// It is also a saved workout, so a tap starts it by `presetId`.
+struct ScheduledWorkout: Codable, Equatable, Identifiable {
+    let presetId: String
+    let name: String
+    let planName: String
+    /// "Scheduled Today", or the session a sequential plan is on. Already
+    /// translated by the phone.
+    let caption: String
+
+    var id: String { "\(planName):\(presetId)" }
 }
 
 /// Everything the phone relays to the watch: what to seed the crown with, and
@@ -262,6 +324,38 @@ struct WatchContext: Codable, Equatable {
     /// a genuinely fresh push from `adoptReceivedContext()` replaying a cached
     /// one — the two are indistinguishable by arrival time.
     var generatedAt: Date?
+    /// The phone's Settings → Haptics switch, and whether its rest-complete
+    /// alert is on (notifications and rest-timer notifications both enabled).
+    /// Optional for the same Codable reason as `weightUnit`; nil means the
+    /// phone hasn't said, which reads as on. Use the `effective…` accessors.
+    var hapticsEnabled: Bool?
+    var restAlertsEnabled: Bool?
+    /// The phone's Settings → Apple Watch choices: page names in swipe order,
+    /// and the ones turned off. Optional for the same Codable reason as
+    /// `weightUnit`; nil means the phone hasn't said, which reads as the
+    /// factory order with every page shown. Read through `visiblePages`.
+    var pageOrder: [String]?
+    var hiddenPages: [String]?
+    /// How the workout page takes a set's weight and reps (`keypad` or
+    /// `crown`). Optional for the same Codable reason as `weightUnit`; read
+    /// `effectiveSetInputStyle`.
+    var setInputStyle: String?
+    /// Saved workouts the wearer can start here. Nil until the phone has
+    /// said; empty means there are none. Optional so an older context blob
+    /// still decodes.
+    var startableWorkouts: [StartableWorkout]? = nil
+    /// Today's planned workouts. Nil until the phone has said, empty when no
+    /// plan has one due.
+    var scheduledWorkouts: [ScheduledWorkout]? = nil
+    /// The phone's active server when `startableWorkouts` was built. Sent
+    /// back with a start request. Nil on a context from before this field.
+    var workoutServerId: String? = nil
+    /// The phone's distance unit (`km` or `miles`). Decides whether a weighted
+    /// carry's distance is shown in metres or yards. Nil reads as metres.
+    var distanceUnit: String? = nil
+    /// The phone's Settings → Apple Watch → Double-tap switch. Defaulted so the
+    /// existing initializer calls need not pass it; nil reads as on.
+    var doubleTapEnabled: Bool? = nil
 
     static let empty = WatchContext(
         today: nil,
@@ -280,7 +374,15 @@ struct WatchContext: Codable, Equatable {
         waterContainers: nil,
         waterGoalMl: nil,
         waterDisplayUnit: nil,
-        generatedAt: nil
+        generatedAt: nil,
+        hapticsEnabled: nil,
+        restAlertsEnabled: nil,
+        pageOrder: nil,
+        hiddenPages: nil,
+        setInputStyle: nil,
+        startableWorkouts: nil,
+        scheduledWorkouts: nil,
+        workoutServerId: nil
     )
 
     /// True when there is no value to anchor the Digital Crown to, which is the
@@ -299,11 +401,41 @@ struct WatchContext: Codable, Equatable {
         formatWaterMl(ml, unit: waterDisplayUnit ?? "ml")
     }
 
+    /// The keypad until the phone says otherwise, or when it names a style
+    /// this build doesn't know.
+    var effectiveSetInputStyle: SetInputStyle {
+        setInputStyle.flatMap(SetInputStyle.init(rawValue:)) ?? .keypad
+    }
+
+    /// The pages to swipe between, in order — see `WatchPage.visible`.
+    func visiblePages(workoutActive: Bool) -> [WatchPage] {
+        WatchPage.visible(order: pageOrder, hidden: hiddenPages, workoutActive: workoutActive)
+    }
+
     var hasSeed: Bool { todayWeightKg != nil || lastWeightKg != nil }
 
     /// `weightUnit`, defaulted to kg — the same fallback used everywhere else
     /// (a fresh watch install before first phone sync, or an unrecognized value).
     var effectiveWeightUnit: WeightUnit { weightUnit ?? .kg }
+
+    /// The unit a weighted carry's distance is shown in: metres, or yards when
+    /// the phone's distance unit is miles.
+    var effectiveCarryUnit: CarryUnit { distanceUnit == "miles" ? .yards : .meters }
+
+    /// Whether button presses on the watch play a haptic. On until the phone
+    /// says otherwise.
+    var effectiveHapticsEnabled: Bool { hapticsEnabled ?? true }
+
+    /// Whether a rest running out buzzes the wrist: needs both the phone's
+    /// haptics and its rest-complete alert on, the same switches that silence
+    /// the phone's own cue.
+    var effectiveRestBuzzEnabled: Bool {
+        effectiveHapticsEnabled && (restAlertsEnabled ?? true)
+    }
+
+    /// Whether the double-tap gesture logs a set. On until the phone says
+    /// otherwise.
+    var effectiveDoubleTapEnabled: Bool { doubleTapEnabled ?? true }
 
     /// Stale seeds are worse than no seed: every morning would start from a lie
     /// and the delta line would reassure falsely.
@@ -331,6 +463,23 @@ struct WatchContext: Codable, Equatable {
 /// phone only converts at display time. This affects the crown dial and trend
 /// chart only. The phone's third option, `st_lbs` (stone + pounds), collapses
 /// to `.lbs` here — the crown dial only has room for one number, not a split.
+/// How a weighted carry's distance is shown and entered. The wire and the diary
+/// always hold km; this only decides the unit on screen.
+enum CarryUnit {
+    case meters
+    case yards
+
+    private static let yardsPerKm = 1093.6133
+
+    /// Units shown per km.
+    var perKm: Double { self == .yards ? Self.yardsPerKm : 1000 }
+    var title: String { self == .yards ? "YD" : "M" }
+    var suffix: String { self == .yards ? "yd" : "m" }
+
+    func fromKm(_ km: Double) -> Double { km * perKm }
+    func toKm(_ value: Double) -> Double { value / perKm }
+}
+
 enum WeightUnit: String, Codable {
     case kg
     case lbs
@@ -405,4 +554,13 @@ enum CheckInDate {
         display.dateFormat = "EEE d MMM"
         return display.string(from: date)
     }
+}
+
+/// How a set's weight and reps are entered on the workout page. Raw values are
+/// the wire strings (`WATCH_SET_INPUT_STYLES` on the phone).
+enum SetInputStyle: String {
+    /// A number keypad: exact values, typed.
+    case keypad
+    /// The Digital Crown, turned in plate steps (Hevy-style).
+    case crown
 }

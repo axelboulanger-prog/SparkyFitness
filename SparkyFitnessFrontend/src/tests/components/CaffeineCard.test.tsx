@@ -36,7 +36,19 @@ jest.mock('recharts', () => ({
   ),
   Area: () => null,
   CartesianGrid: () => null,
-  XAxis: () => null,
+  XAxis: ({
+    ticks,
+    domain,
+  }: {
+    ticks?: number[];
+    domain?: [number, number];
+  }) => (
+    <div
+      data-testid="caffeine-xaxis"
+      data-ticks={JSON.stringify(ticks)}
+      data-domain={JSON.stringify(domain)}
+    />
+  ),
   YAxis: () => null,
   Tooltip: () => null,
   ReferenceLine: ({ y }: { y?: number; x?: number }) => (
@@ -327,6 +339,37 @@ describe('CaffeineCard Component', () => {
     expect(screen.queryByText(/Last 200mg dose/)).not.toBeInTheDocument();
     // Bedtime and now remain; the cutoff marker does not.
     expect(screen.getAllByTestId('ref-line-x')).toHaveLength(2);
+  });
+
+  it('renders X-axis with consistent 1-hour gap ticks on the hour', () => {
+    mockUseActiveCaffeineQuery.mockReturnValue({
+      data: baseData,
+      isLoading: false,
+    } as never);
+
+    render(<CaffeineCard date="2026-09-05" />);
+    const xAxis = screen.getByTestId('caffeine-xaxis');
+    const ticksStr = xAxis.getAttribute('data-ticks');
+    expect(ticksStr).toBeTruthy();
+    const ticks = JSON.parse(ticksStr ?? '[]') as number[];
+    expect(ticks.length).toBeGreaterThan(1);
+
+    // Every tick should be on the hour (:00)
+    for (const t of ticks) {
+      expect(new Date(t).getMinutes()).toBe(0);
+      expect(new Date(t).getSeconds()).toBe(0);
+    }
+
+    // Every interval between consecutive ticks should be exactly 1 hour
+    for (let i = 1; i < ticks.length; i++) {
+      expect((ticks[i] ?? 0) - (ticks[i - 1] ?? 0)).toBe(60 * 60 * 1000);
+    }
+
+    const domainStr = xAxis.getAttribute('data-domain');
+    expect(domainStr).toBeTruthy();
+    const domain = JSON.parse(domainStr ?? '[]') as [number, number];
+    expect(domain[0]).toBe(ticks[0]);
+    expect(domain[1]).toBe(ticks[ticks.length - 1]);
   });
 });
 

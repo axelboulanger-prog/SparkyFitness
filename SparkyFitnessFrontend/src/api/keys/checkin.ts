@@ -36,3 +36,13 @@ export const sleepKeys = {
   details: (startDate: string, endDate: string) =>
     [...sleepKeys.all, 'details', startDate, endDate] as const,
 };
+
+export const mindfulnessKeys = {
+  all: ['mindfulness'] as const,
+  daySummary: (date: string) =>
+    [...mindfulnessKeys.all, 'daySummary', date] as const,
+  entries: (date?: string) =>
+    [...mindfulnessKeys.all, 'entries', date] as const,
+  range: (startDate: string, endDate: string) =>
+    [...mindfulnessKeys.all, 'range', startDate, endDate] as const,
+};

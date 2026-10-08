@@ -22,6 +22,11 @@ vi.mock('../models/coachRepository', () => ({
     getFrequentHighProteinFoods: vi.fn(),
   },
 }));
+vi.mock('../models/symptomRepository', () => ({
+  default: {
+    listSymptomEntries: vi.fn().mockResolvedValue([]),
+  },
+}));
 vi.mock('../services/exerciseCalorieRangeService', () => ({
   getResolvedExerciseCaloriesRange: vi.fn(),
   getResolvedExerciseCaloriesTotal: vi.fn(),
@@ -443,6 +448,11 @@ describe('sparky_get_30_day_trends', () => {
               entries: 9,
               avg_duration_hours: 7.5,
               avg_sleep_score: 83,
+            },
+            symptoms: {
+              entries_logged: 0,
+              symptom_days: 0,
+              episodes: 0,
             },
             biometrics: {
               weight_entries: 2,

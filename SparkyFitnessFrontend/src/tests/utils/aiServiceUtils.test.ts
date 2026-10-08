@@ -33,9 +33,11 @@ describe('getModelOptions', () => {
 
   it('returns presets for perplexity', () => {
     expect(getModelOptions('perplexity')).toEqual([
-      'sonar',
-      'sonar-pro',
-      'sonar-reasoning',
+      'fast',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
     ]);
   });
 

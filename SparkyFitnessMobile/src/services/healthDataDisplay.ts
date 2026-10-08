@@ -592,6 +592,7 @@ const RAW_FORMATTERS: Record<string, (records: unknown[]) => string> = {
 
   LeanBodyMass: formatMassInKg,
   BoneMass: formatMassInKg,
+  BodyWaterMass: formatMassInKg,
 
   WheelchairPushes: (records) => {
     const totalPushes = (records as { count?: number }[]).reduce(

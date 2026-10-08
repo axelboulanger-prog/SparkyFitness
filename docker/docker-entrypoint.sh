@@ -62,6 +62,55 @@ case "${SPARKY_FITNESS_SERVER_HOST}" in
     ;;
 esac
 
+# nginx's own resolver -- which is what a variable proxy_pass upstream uses -- does
+# not implement the "search" domain expansion from /etc/resolv.conf. It queries the
+# name exactly as written, so a bare hostname that libc resolves fine returns
+# NXDOMAIN for nginx: the static assets keep serving while every proxied request
+# fails with 502.
+#
+# Docker's embedded DNS answers bare container/service names directly, so Compose
+# takes the early exit below and is unaffected. Platforms that depend on a search
+# path need the name qualified here -- on Kubernetes "sparkyfitness-server" is only
+# reachable as "<service>.<namespace>.svc.cluster.local".
+#
+# Every probe appends a trailing dot, which does two things and must not be dropped.
+# It forces an absolute lookup: without it musl applies the search list first, and a
+# genuine FQDN can fail when ndots is high (Kubernetes sets ndots:5). It also stops an
+# /etc/hosts entry from satisfying the probe, because those are matched only without
+# the trailing dot -- nginx resolves upstreams through DNS alone, so a name that exists
+# only in /etc/hosts would be exported here and then fail to resolve at request time.
+#
+# The result stays a NAME rather than an IP, so nginx keeps re-resolving it on the
+# "valid=" interval instead of caching a stale address.
+case "${SPARKY_FITNESS_SERVER_HOST}" in
+  # Empty, already qualified, or an IP / bracketed IPv6 literal: nothing to do.
+  ""|*.*|*:*) ;;
+  *)
+    if ! getent hosts "${SPARKY_FITNESS_SERVER_HOST}." >/dev/null 2>&1; then
+        SF_QUALIFIED_HOST=""
+        for SF_SEARCH_DOMAIN in $(awk '/^[[:space:]]*search[[:space:]]/ { for (i = 2; i <= NF; i++) print $i; exit }' /etc/resolv.conf 2>/dev/null); do
+            SF_CANDIDATE_HOST="${SPARKY_FITNESS_SERVER_HOST}.${SF_SEARCH_DOMAIN%.}"
+            if getent hosts "${SF_CANDIDATE_HOST}." >/dev/null 2>&1; then
+                SF_QUALIFIED_HOST="${SF_CANDIDATE_HOST}"
+                break
+            fi
+        done
+
+        if [ -n "${SF_QUALIFIED_HOST}" ]; then
+            echo "Qualified SPARKY_FITNESS_SERVER_HOST '${SPARKY_FITNESS_SERVER_HOST}' as '${SF_QUALIFIED_HOST}' (nginx does not expand search domains)"
+            export SPARKY_FITNESS_SERVER_HOST="${SF_QUALIFIED_HOST}"
+        else
+            echo "WARNING: SPARKY_FITNESS_SERVER_HOST='${SPARKY_FITNESS_SERVER_HOST}' does not resolve as an absolute name," >&2
+            echo "WARNING: and no search domain in /etc/resolv.conf completes it. nginx resolves proxy upstreams" >&2
+            echo "WARNING: without search-domain expansion, so /api/* requests will fail with 502." >&2
+            echo "WARNING: Set SPARKY_FITNESS_SERVER_HOST to a fully qualified hostname." >&2
+        fi
+
+        unset SF_QUALIFIED_HOST SF_SEARCH_DOMAIN SF_CANDIDATE_HOST
+    fi
+    ;;
+esac
+
 echo "Starting SparkyFitness Frontend as ${NGINX_PERMISSION_MODE} with environment variables:"
 echo "  SPARKY_FITNESS_SERVER_HOST=${SPARKY_FITNESS_SERVER_HOST}"
 echo "  SPARKY_FITNESS_SERVER_PORT=${SPARKY_FITNESS_SERVER_PORT}"

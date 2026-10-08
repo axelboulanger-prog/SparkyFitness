@@ -12,6 +12,7 @@ import googleHealthService from './googleHealthService.js';
 import hevyService from '../integrations/hevy/hevyService.js';
 import liftosaurService from '../integrations/liftosaur/liftosaurService.js';
 import { log } from '../config/logging.js';
+import { startProviderSync } from './providerSyncClaim.js';
 
 export interface ProviderSyncTarget {
   id: string;
@@ -138,7 +139,18 @@ export const runProviderSync = async (
     for (const provider of providers) {
       if (provider.is_active && provider.sync_frequency !== 'manual') {
         try {
-          await config.sync(provider);
+          const started = await startProviderSync(
+            { userId: provider.user_id, providerId: provider.id },
+            () => config.sync(provider)
+          );
+          if (started) {
+            await started.running;
+          } else {
+            log(
+              'info',
+              `[CRON] ${config.name} sync skipped for user ${provider.user_id}: another sync for this account is still running.`
+            );
+          }
         } catch (error) {
           log(
             'error',
@@ -158,9 +170,13 @@ export const runProviderSync = async (
 export const scheduleProviderSync = (
   config: ProviderSyncConfig
 ): ScheduledTask => {
-  return cron.schedule(config.cronExpression ?? '0 * * * *', () => {
-    void runProviderSync(config);
-  });
+  // Returning the run lets noOverlap skip a tick while the previous pass over
+  // every user is still going, so two passes never sync the same account at once.
+  return cron.schedule(
+    config.cronExpression ?? '0 * * * *',
+    () => runProviderSync(config),
+    { noOverlap: true }
+  );
 };
 
 export const startProviderSyncSchedulers = (): ScheduledTask[] => {

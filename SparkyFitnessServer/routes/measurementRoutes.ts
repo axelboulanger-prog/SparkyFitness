@@ -14,7 +14,6 @@ import {
   DateParamSchema,
   UuidParamSchema,
   DateRangeParamSchema,
-  StrictDateRangeParamSchema,
   CustomMeasurementsRangeParamSchema,
   LatestCustomEntryQuerySchema,
   ImportHealthDataBodySchema,
@@ -1624,7 +1623,7 @@ router.get(
   authenticate,
   checkPermissionMiddleware('checkin'),
   async (req, res, next) => {
-    const paramResult = StrictDateRangeParamSchema.safeParse(req.params);
+    const paramResult = DateRangeParamSchema.safeParse(req.params);
     if (!paramResult.success) {
       return res.status(400).json({
         error: paramResult.error.issues.map((i) => i.message).join(', '),

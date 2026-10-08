@@ -182,6 +182,7 @@ struct CheckInEntryView: View {
     /// in-session correction path, no navigation involved.
     private var inactiveValue: some View {
         Button {
+            Haptics.tap()
             withAnimation(.snappy) { active = active == .weight ? .bodyFat : .weight }
         } label: {
             Text(inactiveText)
@@ -203,6 +204,7 @@ struct CheckInEntryView: View {
         VStack(spacing: 2) {
             Button(active == .weight ? "Next" : saveLabel) {
                 if active == .weight {
+                    Haptics.tap()
                     withAnimation(.snappy) { active = .bodyFat }
                 } else {
                     save()
@@ -353,6 +355,7 @@ struct TypedValueEntryView: View {
                 .multilineTextAlignment(.center)
             Button("Set") {
                 guard let parsed else { return }
+                Haptics.tap()
                 onCommit(parsed)
                 dismiss()
             }

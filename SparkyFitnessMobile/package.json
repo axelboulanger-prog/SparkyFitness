@@ -1,6 +1,6 @@
 {
   "name": "sparkyfitnessmobile",
-  "version": "1.7.3",
+  "version": "1.8.0",
   "private": true,
   "expo": {
     "autolinking": {
@@ -81,6 +81,7 @@
     "expo-navigation-bar": "~57.0.2",
     "expo-network": "~57.0.2",
     "expo-notifications": "~57.0.21",
+    "expo-quick-actions": "~6.0.2",
     "expo-secure-store": "~57.0.4",
     "expo-sharing": "~57.0.22",
     "expo-speech": "~57.0.3",
@@ -100,6 +101,7 @@
     "react-native-gesture-handler": "~2.32.0",
     "react-native-health-connect": "^4.1.3",
     "react-native-keyboard-controller": "1.21.9",
+    "react-native-maps": "1.27.2",
     "react-native-nitro-modules": "^0.37.1",
     "react-native-pager-view": "8.0.2",
     "react-native-reanimated": "~4.5.1",

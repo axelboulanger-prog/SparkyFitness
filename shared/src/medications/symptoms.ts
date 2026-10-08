@@ -12,6 +12,17 @@ export interface SharedSymptomEntry {
   context_text?: string | null;
   bristol_type?: number | null;
   source?: string | null; // 'manual' | 'cycle' | ... (matches symptom_entries.source)
+  started_at?: string | null;
+  ended_at?: string | null;
+  body_locations?: string[];
+  qualities?: string[];
+  associated_symptoms?: string[];
+  triggers?: string[];
+  phases?: Record<string, string[]>;
+  impact?: string | null;
+  peak_severity?: number | null;
+  severity_timeline?: Array<{ at: string; severity: number }>;
+  custom_fields?: Record<string, unknown>;
 }
 
 export interface SharedUserCustomSymptom {
@@ -19,7 +30,7 @@ export interface SharedUserCustomSymptom {
   user_id: string;
   name: string;
   display_name: string | null;
-  scale_type: "1-10" | "none-severe" | "count" | "text";
+  scale_type: "1-5" | "1-10" | "none-severe" | "count" | "text";
   unit?: string | null;
   is_glp1_flagged: boolean;
 }

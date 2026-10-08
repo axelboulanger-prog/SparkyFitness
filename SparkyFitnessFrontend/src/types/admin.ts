@@ -11,6 +11,8 @@ export interface GlobalSettings {
   dev_tools_enabled?: boolean;
   mock_data_enabled?: boolean;
   is_email_login_env_configured?: boolean;
+  enable_passkey_login?: boolean;
+  is_passkey_login_env_configured?: boolean;
   is_oidc_active_env_configured?: boolean;
 }
 

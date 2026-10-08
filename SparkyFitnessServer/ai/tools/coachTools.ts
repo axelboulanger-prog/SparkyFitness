@@ -6,6 +6,7 @@ import {
 } from '@workspace/shared';
 import { log } from '../../config/logging.js';
 import coachRepository from '../../models/coachRepository.js';
+import symptomRepository from '../../models/symptomRepository.js';
 import { ERRORS, formatZodError } from './errors.js';
 import { normalizeDayKeywords } from './dates.js';
 import { getResolvedExerciseCaloriesTotal } from '../../services/exerciseCalorieRangeService.js';
@@ -176,6 +177,11 @@ async function get30DayTrends(
     end
   );
 
+  const symptomEntries = await symptomRepository.listSymptomEntries(userId, {
+    fromDate: thirtyDayWindowStart(end),
+    toDate: end,
+  });
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const weights = weightRows.map((r: any) => ({
     date: dayString(r.entry_date),
@@ -204,6 +210,13 @@ async function get30DayTrends(
         (Number(sleep.avg_duration_seconds) / 3600).toFixed(1)
       ),
       avg_sleep_score: Number(Number(sleep.avg_sleep_score).toFixed(0)),
+    },
+    symptoms: {
+      entries_logged: symptomEntries.length,
+      symptom_days: new Set(symptomEntries.map((e) => e.entry_date)).size,
+      episodes: symptomEntries.filter(
+        (e) => e.started_at !== null && e.started_at !== undefined
+      ).length,
     },
     biometrics: {
       weight_entries: weights.length,

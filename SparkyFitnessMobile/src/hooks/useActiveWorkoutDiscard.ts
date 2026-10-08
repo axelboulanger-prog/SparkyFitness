@@ -56,7 +56,9 @@ export function useActiveWorkoutDiscard({
               // Clear and exit first: clearing cancels the pending autosave
               // debounce and frees the user immediately; the delete finishes in
               // the background (a racing autosave 404s harmlessly server-side).
-              useActiveWorkoutStore.getState().clearWorkout();
+              useActiveWorkoutStore
+                .getState()
+                .clearWorkout({ discarded: true });
               safeGoBack();
               deleteWorkout(idToDelete)
                 .then(() => {
@@ -100,7 +102,7 @@ export function useActiveWorkoutDiscard({
           text: t('workout.discard', { defaultValue: 'Discard' }),
           style: 'destructive',
           onPress: () => {
-            useActiveWorkoutStore.getState().clearWorkout();
+            useActiveWorkoutStore.getState().clearWorkout({ discarded: true });
             safeGoBack();
           },
         },

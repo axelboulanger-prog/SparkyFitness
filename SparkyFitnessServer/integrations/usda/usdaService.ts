@@ -111,15 +111,27 @@ async function searchUsdaFoods(
   }
 > {
   try {
-    const searchParams = new URLSearchParams({
-      query,
-      pageNumber: String(page),
-      pageSize: String(pageSize),
+    // POST with a JSON body rather than GET query params: USDA's gateway
+    // rejects roughly half of GET searches that carry a dataType filter with
+    // a bare nginx 400, whatever the encoding, while the POST form is
+    // reliable (#2675). The api_key stays in the query string.
+    const searchUrl = `${USDA_API_BASE_URL}/foods/search?${new URLSearchParams({
       api_key: apiKey || '',
-      dataType,
+    }).toString()}`;
+    const dataTypes = dataType
+      .split(',')
+      .map((type) => type.trim())
+      .filter(Boolean);
+    const response = await fetch(searchUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        pageNumber: page,
+        pageSize,
+        ...(dataTypes.length > 0 && { dataType: dataTypes }),
+      }),
     });
-    const searchUrl = `${USDA_API_BASE_URL}/foods/search?${searchParams.toString()}`;
-    const response = await fetch(searchUrl, { method: 'GET' });
     log('debug', 'USDA API Search Response Status:', response.status);
     if (!response.ok) {
       const errorText = await response.text();

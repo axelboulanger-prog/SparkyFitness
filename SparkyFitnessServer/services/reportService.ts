@@ -22,6 +22,14 @@ import {
   calculateMuscleGroupRecovery,
   calculateMuscleGroupSets,
   primaryMusclesOf,
+  bodyWeightOnDay,
+  effectiveLoadKg,
+  epleyOneRepMaxKg,
+  resolveExerciseModality,
+  buildTrainingConsistency,
+  weekStartOf,
+  TRAINING_CONSISTENCY_WEEKS,
+  type TrainingConsistency,
 } from '@workspace/shared';
 import { userAge } from '../utils/dateHelpers.js';
 import { loadUserTimezone } from '../utils/timezoneLoader.js';
@@ -92,6 +100,7 @@ interface WorkoutEntry {
   exercise_level?: string;
   exercise_force?: string;
   exercise_mechanic?: string;
+  exercise_modality?: string | null;
   sets?: Array<{
     weight?: string | number;
     reps?: string | number;
@@ -382,6 +391,10 @@ async function getReportsData(
         level: entry.exercise_level,
         force: entry.exercise_force,
         mechanic: entry.exercise_mechanic,
+        modality: resolveExerciseModality(
+          entry.exercise_modality,
+          entry.exercise_category
+        ),
       },
     }));
 
@@ -551,11 +564,32 @@ async function getNutritionTrendsWithGoals(
     throw error;
   }
 }
-// Helper function to calculate 1RM using the Epley formula
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function calculate1RM(weight: any, reps: any) {
-  if (reps === 0) return 0;
-  return weight * (1 + reps / 30);
+type SetLoad = (
+  entry: Pick<
+    WorkoutEntry,
+    'entry_date' | 'exercise_modality' | 'exercise_category'
+  >,
+  set: { weight?: string | number | null }
+) => number;
+
+/**
+ * The load a set moved (`effectiveLoadKg`): its weight, or for a bodyweight
+ * exercise the lifter's body weight that day plus it. Body weight is looked
+ * up once per day from `readings`.
+ */
+function makeSetLoad(
+  readings: readonly { date: string; weightKg: number }[]
+): SetLoad {
+  const byDay = new Map<string, number | null>();
+  return (entry, set) => {
+    const day = String(entry.entry_date).slice(0, 10);
+    if (!byDay.has(day)) byDay.set(day, bodyWeightOnDay(readings, day));
+    return effectiveLoadKg(
+      parseFloat(String(set.weight)) || 0,
+      resolveExerciseModality(entry.exercise_modality, entry.exercise_category),
+      byDay.get(day)
+    );
+  };
 }
 // Helper function to categorize rep ranges
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -637,7 +671,10 @@ function calculateWorkoutConsistency(
   };
 }
 // Helper function to calculate PR progression
-function calculatePrProgression(exerciseEntries: WorkoutEntry[]) {
+function calculatePrProgression(
+  exerciseEntries: WorkoutEntry[],
+  setLoad: SetLoad
+) {
   const progression: Record<string, PrRecord[]> = {};
   // Sort entries by date ascending to process in chronological order
   const sortedEntries = [...exerciseEntries].sort(
@@ -651,9 +688,9 @@ function calculatePrProgression(exerciseEntries: WorkoutEntry[]) {
 
     if (entry.sets && entry.sets.length > 0) {
       entry.sets.forEach((set) => {
-        const weight = parseFloat(String(set.weight)) || 0;
+        const weight = setLoad(entry, set);
         const reps = parseInt(String(set.reps)) || 0;
-        const oneRM = calculate1RM(weight, reps);
+        const oneRM = epleyOneRepMaxKg(weight, reps);
         if (!progression[entry.exercise_name]) {
           progression[entry.exercise_name] = [];
         }
@@ -763,6 +800,15 @@ async function getExerciseDashboardData(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (entry: any) => entry.exercise_name !== 'Active Calories'
     );
+    // Volume, 1RM and PRs are measured on the load each set moved, which for
+    // a bodyweight exercise includes the lifter's body weight that day.
+    const setLoad = makeSetLoad(
+      await reportRepository.getBodyWeightReadings(
+        targetUserId,
+        startDate,
+        endDate
+      )
+    );
     let totalVolume = 0;
     let totalReps = 0;
     const totalWorkouts = new Set(); // To count unique workout days
@@ -788,7 +834,7 @@ async function getExerciseDashboardData(
         const primaryMuscles = primaryMusclesOf(entry);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         entry.sets.forEach((set: any) => {
-          const weight = parseFloat(set.weight) || 0;
+          const weight = setLoad(entry, set);
           const reps = parseInt(set.reps) || 0;
           // Calculate total volume and reps
           totalVolume += weight * reps;
@@ -796,7 +842,7 @@ async function getExerciseDashboardData(
 
           if (isStrengthFormat) {
             // Calculate 1RM and track PRs
-            const oneRM = calculate1RM(weight, reps);
+            const oneRM = epleyOneRepMaxKg(weight, reps);
             if (
               !prData[entry.exercise_name] ||
               oneRM > prData[entry.exercise_name].oneRM
@@ -842,7 +888,7 @@ async function getExerciseDashboardData(
     );
     const recoveryData = calculateMuscleGroupRecovery(exerciseEntries);
     const muscleGroupSets = calculateMuscleGroupSets(exerciseEntries);
-    const prProgressionData = calculatePrProgression(exerciseEntries);
+    const prProgressionData = calculatePrProgression(exerciseEntries, setLoad);
     const exerciseVarietyData = calculateExerciseVariety(exerciseEntries);
     const setPerformanceData = calculateSetPerformance(exerciseEntries);
     return {
@@ -871,13 +917,64 @@ async function getExerciseDashboardData(
     throw error;
   }
 }
+/**
+ * Training days, weekly streak and this-vs-last-week sets per muscle, for the
+ * consistency view. Looks back a fixed `TRAINING_CONSISTENCY_WEEKS` weeks from
+ * today in the user's timezone, independent of the dashboard's chosen range.
+ */
+async function getTrainingConsistency(
+  authenticatedUserId: string,
+  targetUserId: string
+): Promise<TrainingConsistency> {
+  try {
+    const timezone = await loadUserTimezone(targetUserId);
+    const today = todayInZone(timezone);
+    // The account's first day of the week (0 = Sunday), like the calendars.
+    const preferences =
+      await preferenceRepository.getUserPreferences(targetUserId);
+    const rawFirstDay = preferences?.first_day_of_week;
+    const firstDayOfWeek =
+      rawFirstDay !== null && rawFirstDay !== undefined
+        ? Number(rawFirstDay)
+        : 0;
+    const startDate = addDays(
+      weekStartOf(today, firstDayOfWeek),
+      -7 * (TRAINING_CONSISTENCY_WEEKS - 1)
+    );
+    const entries = await reportRepository.getExerciseEntries(
+      targetUserId,
+      startDate,
+      today
+    );
+    // Synced calorie summaries are logged as exercise entries but are not
+    // workouts, the same exclusion the exercise dashboard makes.
+    return buildTrainingConsistency(
+      entries.filter(
+        (entry: { exercise_name?: string }) =>
+          entry.exercise_name !== 'Active Calories'
+      ),
+      today,
+      TRAINING_CONSISTENCY_WEEKS,
+      firstDayOfWeek
+    );
+  } catch (error) {
+    log(
+      'error',
+      `Error building training consistency for user ${targetUserId} by ${authenticatedUserId}:`,
+      error
+    );
+    throw error;
+  }
+}
 export { getReportsData };
 export { getMiniNutritionTrends };
 export { getNutritionTrendsWithGoals };
 export { getExerciseDashboardData };
+export { getTrainingConsistency };
 export default {
   getReportsData,
   getMiniNutritionTrends,
   getNutritionTrendsWithGoals,
   getExerciseDashboardData,
+  getTrainingConsistency,
 };

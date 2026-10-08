@@ -53,7 +53,9 @@ export function useActiveWorkoutFinish({
             text: t('workout.discard', { defaultValue: 'Discard' }),
             style: 'destructive',
             onPress: () => {
-              useActiveWorkoutStore.getState().clearWorkout();
+              useActiveWorkoutStore
+                .getState()
+                .clearWorkout({ discarded: true });
               safeGoBack();
             },
           },

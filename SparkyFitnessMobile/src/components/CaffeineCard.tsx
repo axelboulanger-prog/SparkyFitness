@@ -58,19 +58,60 @@ const CaffeineCard: React.FC<CaffeineCardProps> = ({
   // reach it walked the whole span at 15-minute steps with no cap.
   const windowMs = useMemo(() => {
     if (!kinetics || kinetics.doses.length === 0) return null;
-    const firstDoseMs = kinetics.doses.reduce(
-      (earliest, dose) => Math.min(earliest, new Date(dose.at).getTime()),
-      Number.POSITIVE_INFINITY
-    );
-    const end = bedtimeMs + 2 * 60 * 60 * 1000;
-    // `bedtime_at` sits on the date being viewed, so the 24 hours before it are
-    // that day. Only a clock inside them belongs on this chart; anything else
-    // is a different day and must not drag the window across to meet it.
-    const nowBelongsToDay =
-      nowMs >= bedtimeMs - 24 * 60 * 60 * 1000 && nowMs <= end;
-    const doseStart = firstDoseMs - 60 * 60 * 1000;
+    const rawEnd = bedtimeMs + 2 * 60 * 60 * 1000;
+
+    // The calendar start of the viewed day in local time
+    const [bedtimeHourStr] = kinetics.target_bedtime.split(':');
+    const bedtimeHour = parseInt(bedtimeHourStr ?? '22', 10);
+    const bedtimeDate = new Date(kinetics.bedtime_at);
+    const viewedYear = bedtimeDate.getFullYear();
+    const viewedMonth = bedtimeDate.getMonth();
+    const viewedDay =
+      bedtimeDate.getDate() - (!isNaN(bedtimeHour) && bedtimeHour < 12 ? 1 : 0);
+    const dayStartMs = new Date(
+      viewedYear,
+      viewedMonth,
+      viewedDay,
+      0,
+      0,
+      0,
+      0
+    ).getTime();
+    const nowBelongsToDay = nowMs >= dayStartMs && nowMs <= rawEnd;
+
+    const dayDoses = kinetics.doses.filter((dose) => {
+      const ms = new Date(dose.at).getTime();
+      return ms >= dayStartMs && ms <= rawEnd;
+    });
+
+    const firstDoseMs =
+      dayDoses.length > 0
+        ? dayDoses.reduce(
+            (earliest, dose) => Math.min(earliest, new Date(dose.at).getTime()),
+            Number.POSITIVE_INFINITY
+          )
+        : dayStartMs + 8 * 60 * 60 * 1000;
+    const doseStart =
+      dayDoses.length > 0 ? firstDoseMs - 60 * 60 * 1000 : firstDoseMs;
+    const rawStart = nowBelongsToDay ? Math.min(doseStart, nowMs) : doseStart;
+
+    // Align start to the top of the hour without local-time mutation
+    const startDate = new Date(rawStart);
+    const startRemainderMs =
+      (startDate.getMinutes() * 60 + startDate.getSeconds()) * 1000 +
+      startDate.getMilliseconds();
+    const start = rawStart - startRemainderMs;
+
+    // Align end to the top of the next hour without local-time mutation
+    const endDate = new Date(rawEnd);
+    const endRemainderMs =
+      (endDate.getMinutes() * 60 + endDate.getSeconds()) * 1000 +
+      endDate.getMilliseconds();
+    const end =
+      endRemainderMs === 0 ? rawEnd : rawEnd + (3600 * 1000 - endRemainderMs);
+
     return {
-      start: nowBelongsToDay ? Math.min(doseStart, nowMs) : doseStart,
+      start,
       end,
       nowBelongsToDay,
     };

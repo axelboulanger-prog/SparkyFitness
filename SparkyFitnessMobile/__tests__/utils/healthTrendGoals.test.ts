@@ -1,7 +1,4 @@
-import {
-  resolveHydrationGoal,
-  resolveWeightGoal,
-} from '../../src/utils/healthTrendGoals';
+import { resolveWeightGoal } from '../../src/utils/healthTrendGoals';
 
 describe('resolveWeightGoal', () => {
   test('converts a numeric-string target weight into the display unit', () => {
@@ -20,22 +17,5 @@ describe('resolveWeightGoal', () => {
   test('returns undefined for a non-positive or non-numeric target weight', () => {
     expect(resolveWeightGoal('0', 'kg')).toBeUndefined();
     expect(resolveWeightGoal('not-a-number', 'kg')).toBeUndefined();
-  });
-});
-
-describe('resolveHydrationGoal', () => {
-  // `HydrationBarChart` expects `goal` in raw millilitres (matching `data`'s unit) and
-  // converts it to the display unit itself, the same way it converts each plotted point —
-  // converting here too would double-convert it.
-  test('returns the millilitre water goal unchanged', () => {
-    expect(resolveHydrationGoal(2500)).toBe(2500);
-  });
-
-  test('returns undefined when the water goal is zero', () => {
-    expect(resolveHydrationGoal(0)).toBeUndefined();
-  });
-
-  test('returns undefined for a negative water goal', () => {
-    expect(resolveHydrationGoal(-1)).toBeUndefined();
   });
 });

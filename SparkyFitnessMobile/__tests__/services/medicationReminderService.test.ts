@@ -602,4 +602,168 @@ describe('reconcileMedicationReminders', () => {
       expect(mockCancel).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('consolidated reminders', () => {
+    const med2 = buildMedication({
+      id: 'med-2',
+      name: 'Lisinopril',
+      dose_amount: 10,
+      dose_unit: 'mg',
+      schedules: [buildSchedule({ id: 'sched-2', medication_id: 'med-2' })],
+    });
+
+    const med3 = buildMedication({
+      id: 'med-3',
+      name: 'Vitamin D3',
+      dose_amount: 1000,
+      dose_unit: 'IU',
+      schedules: [buildSchedule({ id: 'sched-3', medication_id: 'med-3' })],
+    });
+
+    const med4 = buildMedication({
+      id: 'med-4',
+      name: 'Aspirin',
+      dose_amount: 81,
+      dose_unit: 'mg',
+      schedules: [buildSchedule({ id: 'sched-4', medication_id: 'med-4' })],
+    });
+
+    const med5 = buildMedication({
+      id: 'med-5',
+      name: 'Omega 3',
+      dose_amount: 1000,
+      dose_unit: 'mg',
+      schedules: [buildSchedule({ id: 'sched-5', medication_id: 'med-5' })],
+    });
+
+    it('consolidates multiple medications due at the same time into a single notification', async () => {
+      await reconcileMedicationReminders([buildMedication(), med2], []);
+
+      // 1 base + 3 repeats today + 6 days lookahead = 10 calls (instead of 20)
+      expect(mockSchedule).toHaveBeenCalledTimes(10);
+
+      const firstCall = mockSchedule.mock.calls[0][0];
+      expect(firstCall.content.title).toBe('Medication reminder');
+      expect(firstCall.content.categoryIdentifier).toBe(
+        'medication-reminder-group'
+      );
+      expect(firstCall.content.body).toBe(
+        'Scheduled doses: Metformin (500 mg), Lisinopril (10 mg)'
+      );
+      expect(firstCall.content.data?.isGroup).toBe('true');
+      expect(JSON.parse(firstCall.content.data?.doses ?? '[]')).toEqual([
+        { medicationId: 'med-1', scheduleId: 'sched-1' },
+        { medicationId: 'med-2', scheduleId: 'sched-2' },
+      ]);
+    });
+
+    it('uses overflow formatting when more than 3 medications are due at the same time', async () => {
+      await reconcileMedicationReminders(
+        [buildMedication(), med2, med3, med4, med5],
+        []
+      );
+
+      const firstCall = mockSchedule.mock.calls[0][0];
+      expect(firstCall.content.body).toBe(
+        'Scheduled doses: Metformin (500 mg), Lisinopril (10 mg), Vitamin D3 (1000 IU), and 2 more'
+      );
+    });
+
+    it('uses pluralized generic body when hideNames is true', async () => {
+      useAppPreferencesStore.setState({ medicationReminderHideNames: true });
+
+      await reconcileMedicationReminders([buildMedication(), med2], []);
+
+      const firstCall = mockSchedule.mock.calls[0][0];
+      expect(firstCall.content.body).toBe('You have 2 scheduled doses');
+      expect(firstCall.content.data?.hideNames).toBe('true');
+    });
+
+    it('schedules separate notifications when consolidate preference is disabled', async () => {
+      useAppPreferencesStore.setState({
+        medicationReminderConsolidate: false,
+        medicationReminderRepeats: false,
+      });
+
+      await reconcileMedicationReminders([buildMedication(), med2], []);
+
+      // 7 days * 2 medications = 14 notifications
+      expect(mockSchedule).toHaveBeenCalledTimes(14);
+      for (const call of mockSchedule.mock.calls) {
+        expect(call[0].content.categoryIdentifier).toBe('medication-reminder');
+        expect(call[0].content.data?.isGroup).toBeUndefined();
+      }
+    });
+
+    it('cancels group reminder and schedules single reminder when one dose is logged mid-day', async () => {
+      const groupKey = 'med_group_2026-07-28_09:00_med-1:sched-1_med-2:sched-2';
+      mockGetAllScheduled.mockResolvedValue([
+        pendingRequest('group-notif', {
+          medicationId: 'med-1',
+          key: groupKey,
+          baseKey: groupKey,
+        }),
+      ]);
+
+      await reconcileMedicationReminders(
+        [buildMedication(), med2],
+        [
+          buildEntry({
+            medication_id: 'med-1',
+            schedule_id: 'sched-1',
+            status: 'taken',
+          }),
+        ]
+      );
+
+      // The old group notification was cancelled
+      expect(mockCancel).toHaveBeenCalledWith('group-notif');
+
+      // The remaining dose (med-2) is now scheduled as a single reminder
+      const singleCall = mockSchedule.mock.calls.find(
+        (c) => c[0].content.data?.medicationId === 'med-2'
+      );
+      expect(singleCall).toBeDefined();
+      expect(singleCall?.[0].content.categoryIdentifier).toBe(
+        'medication-reminder'
+      );
+      expect(singleCall?.[0].content.body).toBe(
+        'Scheduled dose: Lisinopril (10 mg)'
+      );
+    });
+
+    it('cancels all reminders when all doses in the slot are logged', async () => {
+      const groupKey = 'med_group_2026-07-28_09:00_med-1:sched-1_med-2:sched-2';
+      mockGetAllScheduled.mockResolvedValue([
+        pendingRequest('group-notif', {
+          medicationId: 'med-1',
+          key: groupKey,
+          baseKey: groupKey,
+        }),
+      ]);
+
+      await reconcileMedicationReminders(
+        [buildMedication(), med2],
+        [
+          buildEntry({
+            medication_id: 'med-1',
+            schedule_id: 'sched-1',
+            status: 'taken',
+          }),
+          buildEntry({
+            id: 'entry-2',
+            medication_id: 'med-2',
+            schedule_id: 'sched-2',
+            status: 'taken',
+          }),
+        ]
+      );
+
+      expect(mockCancel).toHaveBeenCalledWith('group-notif');
+      const todayScheduled = mockSchedule.mock.calls.filter((c) =>
+        (c[0].content.data?.key as string)?.includes(TODAY)
+      );
+      expect(todayScheduled).toHaveLength(0);
+    });
+  });
 });

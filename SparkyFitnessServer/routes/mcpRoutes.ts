@@ -179,7 +179,10 @@ router.post('/', async (req, res) => {
     });
     // McpServer wraps the low-level Server as `.server`.
     mcpServer.server.onerror = (e) => log('error', '[MCP] server error', e);
-    registerRegistryTools(mcpServer, userId, tz, profile);
+    // A read-only API key only gets read tools; mixed tools refuse their
+    // write actions at call time (ai/mcp/toolAccess.ts, issue #2678).
+    const readOnly = req.apiKeyReadOnly === true;
+    registerRegistryTools(mcpServer, userId, tz, profile, { readOnly });
     // Admin-only dev tools, off by default; gating at registration keeps them
     // out of non-admins' tools/list. authenticate already populated req.user.
     const devToolsAllowed =
@@ -187,7 +190,7 @@ router.post('/', async (req, res) => {
         process.env.DEV_TOOLS_ENABLED === 'true') &&
       (await resolveIsAdmin(req.user, req.authenticatedUserId));
     if (devToolsAllowed) {
-      registerDevTools(mcpServer, userId);
+      registerDevTools(mcpServer, userId, { readOnly });
     }
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

@@ -109,7 +109,8 @@ async function getAccessibleUsers(userId: string) {
            (fa.access_permissions->>'can_manage_diary')::boolean = TRUE OR
            (fa.access_permissions->>'can_manage_checkin')::boolean = TRUE OR
            (fa.access_permissions->>'can_view_reports')::boolean = TRUE OR
-           (fa.access_permissions->>'can_manage_medications')::boolean = TRUE
+           (fa.access_permissions->>'can_manage_medications')::boolean = TRUE OR
+           (fa.access_permissions->>'can_manage_symptoms')::boolean = TRUE
          )`,
       [userId]
     );

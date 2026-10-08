@@ -1,8 +1,12 @@
 import type {
+  ExerciseActivityQueryItem,
   ExerciseEntryHrZones,
   GpsTrackPoint,
+  IndividualSessionResponse,
   WorkoutHeartRatePoint,
 } from '@workspace/shared';
+import { canEditGroupedWorkout } from '@workspace/shared';
+import { distanceFromKm } from './unitConversions';
 
 /** Trackpoints kept when drawing a route; plenty for a phone-width figure. */
 const MAX_ROUTE_POINTS = 1500;
@@ -14,6 +18,104 @@ export interface ProjectedRoute {
   end: { x: number; y: number };
 }
 
+type LatLon = Pick<GpsTrackPoint, 'lat' | 'lon'>;
+
+/**
+ * The fixes worth drawing, in order: finite, on the globe (maps clamp or
+ * wrap anything else, so the map and the plain line would disagree), not 0,0
+ * (what a sensor reports before it has a fix, not a place), and thinned to
+ * at most MAX_ROUTE_POINTS while keeping the last one.
+ */
+export function usableRoutePoints(points: readonly LatLon[]): LatLon[] {
+  const usable = points.filter(
+    (p) =>
+      Number.isFinite(p.lat) &&
+      Number.isFinite(p.lon) &&
+      Math.abs(p.lat) <= 90 &&
+      Math.abs(p.lon) <= 180 &&
+      !(p.lat === 0 && p.lon === 0)
+  );
+  const step = Math.ceil(usable.length / MAX_ROUTE_POINTS);
+  return usable.filter(
+    (_, index) => index % step === 0 || index === usable.length - 1
+  );
+}
+
+export interface RouteRegion {
+  latitude: number;
+  longitude: number;
+  latitudeDelta: number;
+  longitudeDelta: number;
+}
+
+/** Smallest span shown, about 200 m, so a short or stationary track has context. */
+const MIN_REGION_DELTA = 0.002;
+/**
+ * Largest spans shown, just under a full turn. At exactly 360° of longitude
+ * the region's two edges are the same meridian, and Google Maps cannot fit
+ * bounds between them; latitude gets the same margin below 180°.
+ */
+const MAX_LONGITUDE_DELTA = 359;
+const MAX_LATITUDE_DELTA = 179;
+
+/**
+ * A map region around the route with a margin on every side, for the map's
+ * first frame. Returns null for fewer than two usable points.
+ */
+export function routeRegion(
+  points: readonly LatLon[],
+  margin = 1.3
+): RouteRegion | null {
+  const usable = usableRoutePoints(points);
+  if (usable.length < 2) return null;
+  const lats = usable.map((p) => p.lat);
+  const lons = usable.map((p) => p.lon);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const lon = longitudeSpan(lons);
+  return {
+    latitude: (minLat + maxLat) / 2,
+    longitude: lon.center,
+    latitudeDelta: Math.min(
+      Math.max((maxLat - minLat) * margin, MIN_REGION_DELTA),
+      MAX_LATITUDE_DELTA
+    ),
+    longitudeDelta: Math.min(
+      Math.max(lon.span * margin, MIN_REGION_DELTA),
+      MAX_LONGITUDE_DELTA
+    ),
+  };
+}
+
+/**
+ * The shortest arc of longitude holding every point. Sorted around the
+ * circle, the points leave one widest empty gap; the route is the rest. For
+ * an ordinary route that gap is the one across ±180°, which gives the plain
+ * min-to-max span; for a route over the date line it is somewhere else.
+ */
+function longitudeSpan(lons: readonly number[]): {
+  center: number;
+  span: number;
+} {
+  const sorted = [...lons].sort((a, b) => a - b);
+  const last = sorted.length - 1;
+  // The gap after sorted[i] up to the next point, wrapping after the last.
+  let gapIndex = last;
+  let widestGap = (sorted[0] ?? 0) + 360 - (sorted[last] ?? 0);
+  for (let i = 0; i < last; i++) {
+    const gap = (sorted[i + 1] ?? 0) - (sorted[i] ?? 0);
+    if (gap > widestGap) {
+      widestGap = gap;
+      gapIndex = i;
+    }
+  }
+  const start = sorted[(gapIndex + 1) % sorted.length] ?? 0;
+  const span = 360 - widestGap;
+  let center = start + span / 2;
+  if (center >= 180) center -= 360;
+  return { center, span };
+}
+
 /**
  * Projects a GPS track into a box for drawing without map tiles. Longitude
  * is scaled by the cosine of the mean latitude so the shape is not stretched
@@ -21,24 +123,13 @@ export interface ProjectedRoute {
  * Returns null for fewer than two usable points.
  */
 export function projectRoute(
-  points: readonly Pick<GpsTrackPoint, 'lat' | 'lon'>[],
+  points: readonly LatLon[],
   width: number,
   height: number,
   padding = 12
 ): ProjectedRoute | null {
-  // 0,0 is what a sensor reports before it has a fix, not a place.
-  const usable = points.filter(
-    (p) =>
-      Number.isFinite(p.lat) &&
-      Number.isFinite(p.lon) &&
-      !(p.lat === 0 && p.lon === 0)
-  );
-  if (usable.length < 2) return null;
-
-  const step = Math.ceil(usable.length / MAX_ROUTE_POINTS);
-  const sampled = usable.filter(
-    (_, index) => index % step === 0 || index === usable.length - 1
-  );
+  const sampled = usableRoutePoints(points);
+  if (sampled.length < 2) return null;
 
   const meanLat = sampled.reduce((sum, p) => sum + p.lat, 0) / sampled.length;
   const lonScale = Math.cos((meanLat * Math.PI) / 180);
@@ -113,17 +204,99 @@ export interface HeartRateZoneRow {
 export function heartRateZoneRows(
   zones: readonly ExerciseEntryHrZones[]
 ): HeartRateZoneRow[] {
-  const total = zones.reduce(
-    (sum, zone) => sum + Math.max(0, zone.seconds_in_zone),
-    0
-  );
-  return [...zones]
-    .sort((a, b) => a.zone_index - b.zone_index)
-    .map((zone) => ({
-      zone: zone.zone_index,
-      lowerBpm: zone.zone_lower_bpm,
-      upperBpm: zone.zone_upper_bpm,
-      seconds: Math.max(0, zone.seconds_in_zone),
-      share: total > 0 ? Math.max(0, zone.seconds_in_zone) / total : 0,
+  return combinedHeartRateZoneRows([zones]);
+}
+
+/**
+ * Time in each zone across several exercise entries: a whole workout, where
+ * the watch stored zones per exercise. Seconds add up by zone; a zone's
+ * bounds come from whichever entries carry them (they are computed from the
+ * same max heart rate, so they agree), widest first. One entry's rows are
+ * exactly `heartRateZoneRows` of it.
+ */
+export function combinedHeartRateZoneRows(
+  zonesPerEntry: readonly (readonly ExerciseEntryHrZones[])[]
+): HeartRateZoneRow[] {
+  const byZone = new Map<
+    number,
+    { lowerBpm: number | null; upperBpm: number | null; seconds: number }
+  >();
+  for (const zones of zonesPerEntry) {
+    for (const zone of zones) {
+      const row = byZone.get(zone.zone_index) ?? {
+        lowerBpm: null,
+        upperBpm: null,
+        seconds: 0,
+      };
+      row.seconds += Math.max(0, zone.seconds_in_zone);
+      if (zone.zone_lower_bpm != null) {
+        row.lowerBpm =
+          row.lowerBpm == null
+            ? zone.zone_lower_bpm
+            : Math.min(row.lowerBpm, zone.zone_lower_bpm);
+      }
+      if (zone.zone_upper_bpm != null) {
+        row.upperBpm =
+          row.upperBpm == null
+            ? zone.zone_upper_bpm
+            : Math.max(row.upperBpm, zone.zone_upper_bpm);
+      }
+      byZone.set(zone.zone_index, row);
+    }
+  }
+  const total = [...byZone.values()].reduce((sum, row) => sum + row.seconds, 0);
+  return [...byZone.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([zone, row]) => ({
+      zone,
+      lowerBpm: row.lowerBpm,
+      upperBpm: row.upperBpm,
+      seconds: row.seconds,
+      share: total > 0 ? row.seconds / total : 0,
     }));
+}
+
+/**
+ * Maps a diary workout to the shape the cardio detail screen takes, or null
+ * when that screen has nothing to add. Only synced workouts qualify: in-app
+ * entries (manual, sparky, workout plan, or no source) carry no route, heart
+ * rate, or zones, and strength sessions are logged as weight and reps.
+ */
+export function cardioSessionFromDiaryEntry(
+  session: IndividualSessionResponse,
+  distanceUnit: 'km' | 'miles'
+): ExerciseActivityQueryItem | null {
+  if (!session.entry_date) return null;
+  if (canEditGroupedWorkout(session.source)) return null;
+  if (session.exercise_snapshot?.modality === 'weight_reps') return null;
+  if (session.sets.some((set) => set.weight != null || set.reps != null)) {
+    return null;
+  }
+
+  const distanceKm =
+    session.distance != null && session.distance > 0 ? session.distance : null;
+  return {
+    id: session.id,
+    userId: '',
+    exerciseName:
+      session.name ??
+      session.exercise_snapshot?.name ??
+      session.category ??
+      'Workout',
+    category: session.category ?? session.exercise_snapshot?.category ?? null,
+    entryDate: session.entry_date,
+    entryTime: session.entry_time ?? null,
+    durationMinutes: session.duration_minutes,
+    movingDurationMinutes: null,
+    distanceMeters: distanceKm != null ? distanceKm * 1000 : null,
+    distanceFormatted:
+      distanceKm != null ? distanceFromKm(distanceKm, distanceUnit) : null,
+    avgPaceSecondsPerKm: null,
+    formattedPace: null,
+    caloriesBurned: session.calories_burned,
+    avgHeartRate: session.avg_heart_rate,
+    source: session.source,
+    notes: session.notes,
+    hasGpsTrack: false,
+  };
 }

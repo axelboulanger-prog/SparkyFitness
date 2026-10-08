@@ -1052,8 +1052,19 @@ async function processWithingsWorkouts(
         .split('T')[0];
       // @ts-expect-error TS(2339): Property 'data' does not exist on type 'never'.
       const caloriesBurned = workout.data.calories || 0;
+      // Without a per-workout source_id the entry falls back to the manual
+      // one-per-exercise-per-day rule, so a second workout of the same
+      // category on one day overwrites the first instead of being stored.
+      // @ts-expect-error TS(2339): Property 'id' does not exist on type 'never'.
+      const workoutId = workout.id;
+      const sourceId =
+        workoutId !== undefined && workoutId !== null
+          ? String(workoutId)
+          : // @ts-expect-error TS(2339): Property 'startdate' does not exist on type 'never'.
+            `withings-workout-${workout.startdate}`;
       const exerciseEntryData = {
         exercise_id: exercise.id,
+        source_id: sourceId,
         duration_minutes: durationMinutes,
         calories_burned: caloriesBurned,
         entry_date: entryDate,

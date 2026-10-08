@@ -6,6 +6,11 @@ import liftosaurService, {
 import { log } from '../config/logging.js';
 import authMiddleware from '../middleware/authMiddleware.js';
 import checkPermissionMiddleware from '../middleware/checkPermissionMiddleware.js';
+import {
+  SYNC_ALREADY_RUNNING_RESPONSE,
+  syncClaimTarget,
+  startProviderSync,
+} from '../services/providerSyncClaim.js';
 
 const router = express.Router();
 
@@ -81,14 +86,23 @@ router.post(
         'info',
         `[liftosaurRoutes] Manual sync triggered for user ${userId}${startDate ? ` from ${startDate}` : ''}${endDate ? ` to ${endDate}` : ''}`
       );
-      const result = await liftosaurService.syncLiftosaurData(
-        userId,
-        createdByUserId,
-        fullSync,
-        providerId,
-        startDate,
-        endDate
+      const started = await startProviderSync(
+        syncClaimTarget(userId, 'liftosaur', providerId),
+        () =>
+          liftosaurService.syncLiftosaurData(
+            userId,
+            createdByUserId,
+            fullSync,
+            providerId,
+            startDate,
+            endDate
+          )
       );
+      if (!started) {
+        res.status(409).json(SYNC_ALREADY_RUNNING_RESPONSE);
+        return;
+      }
+      const result = await started.running;
       res.status(200).json(result);
     } catch (error) {
       const { status, code } = liftosaurErrorReason(error);

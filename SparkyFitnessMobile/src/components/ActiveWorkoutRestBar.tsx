@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Pressable, Text, View } from 'react-native';
+import { AppState, Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCSSVariable } from 'uniwind';
 
@@ -106,8 +106,13 @@ function ActiveWorkoutRestBar({
       lastCountdownSecRef.current !== remainingSec
     ) {
       lastCountdownSecRef.current = remainingSec;
-      playIntervalCue('countdown');
-      fireSelectionHaptic();
+      // Lead-in beeps are for someone watching the bar. Off screen (the
+      // background rest chime keeps JS running) the single rest-complete
+      // chime is the whole cue, not three beeps and then the chime.
+      if (AppState.currentState === 'active') {
+        playIntervalCue('countdown');
+        fireSelectionHaptic();
+      }
     }
   }, [remainingMs, state]);
 

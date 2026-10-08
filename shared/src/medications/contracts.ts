@@ -1,3 +1,4 @@
+import type { FoodVariantNutrientField } from '../constants/foodVariantNutrients.ts';
 import type { SharedScheduleRule } from './schedules.ts';
 
 // Contract types for the v2 medications API (/api/v2/medications). Field
@@ -8,6 +9,16 @@ export type MedicationEntryStatus = 'taken' | 'skipped' | 'snoozed' | 'prn_taken
 
 /** Meal timing for a scheduled dose, relative to the nearest meal. */
 export type MedicationWithMeal = 'before' | 'with' | 'after' | 'away_from_meals';
+
+/**
+ * A supplement's per-serving nutrition: the fixed food-variant nutrient columns
+ * plus the user's own custom nutrients, keyed by custom nutrient name.
+ */
+export type MedicationNutrients = Partial<
+  Record<FoodVariantNutrientField, number>
+> & {
+  custom_nutrients?: Record<string, number>;
+};
 
 export interface Medication {
   id: string;
@@ -39,6 +50,10 @@ export interface Medication {
   is_active: boolean;
   is_quick: boolean;
   is_glp1: boolean;
+  /** A supplement counts toward the day's nutrition through `nutrients`. */
+  is_supplement?: boolean;
+  /** Nutrition per serving taken, for a supplement. Empty for a medication. */
+  nutrients?: MedicationNutrients;
   notes: string | null;
   source: string;
   rxnorm_rxcui?: string | null;
@@ -126,6 +141,8 @@ export interface CreateMedicationInput {
   is_active?: boolean;
   is_quick?: boolean;
   is_glp1?: boolean;
+  is_supplement?: boolean;
+  nutrients?: MedicationNutrients;
   notes?: string | null;
   source?: string;
   custom_fields?: Record<string, unknown>;

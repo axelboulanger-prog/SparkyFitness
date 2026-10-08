@@ -11,6 +11,12 @@ export function medicationTypeLabel(
       return t('medications.types.tablet', { defaultValue: 'Tablet' });
     case 'capsule':
       return t('medications.types.capsule', { defaultValue: 'Capsule' });
+    case 'softgel':
+      return t('medications.types.softgel', { defaultValue: 'Softgel' });
+    case 'gummy':
+      return t('medications.types.gummy', { defaultValue: 'Gummy' });
+    case 'powder':
+      return t('medications.types.powder', { defaultValue: 'Powder' });
     case 'liquid':
       return t('medications.types.liquid', { defaultValue: 'Liquid' });
     case 'injection':

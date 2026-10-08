@@ -53,23 +53,21 @@ jest.mock('victory-native', () => {
       );
     },
     Bar: () => null,
-  };
-});
-
-jest.mock('@shopify/react-native-skia', () => {
-  const ReactModule = require('react');
-  const { View } = require('react-native');
-  return {
+    // `TrendGoalLine` draws its stepped goal line through this same `Line`, distinguished
+    // here by `curveType` -- nothing else in this chart renders a victory-native `Line`.
     Line: ({ children, ...props }: Record<string, unknown>) =>
       ReactModule.createElement(
         View,
         { testID: 'goal-line', ...props },
         children
       ),
-    DashPathEffect: () => null,
-    matchFont: jest.fn(() => null),
   };
 });
+
+jest.mock('@shopify/react-native-skia', () => ({
+  DashPathEffect: () => null,
+  matchFont: jest.fn(() => null),
+}));
 
 type Point = { day: string; steps: number };
 
@@ -187,15 +185,15 @@ describe('TrendBarChart', () => {
     expect(screen.queryByText('2000 steps')).toBeNull();
   });
 
-  test('expands the y-domain to include a goalValue above every bar', () => {
-    renderChart({ goalValue: 5000 });
+  test('expands the y-domain to include the highest goalValues entry above every bar', () => {
+    renderChart({ goalValues: [5000, 5000, 5000] });
 
     expect(screen.getByTestId('cartesian-chart').props.domain).toEqual({
       y: [0, 5000],
     });
   });
 
-  test('labels a nice round domain from the data alone when no goalValue is supplied', () => {
+  test('labels a nice round domain from the data alone when no goalValues is supplied', () => {
     renderChart();
 
     expect(screen.getByTestId('cartesian-chart').props.domain).toEqual({
@@ -203,24 +201,34 @@ describe('TrendBarChart', () => {
     });
   });
 
-  test('renders a dashed goal line at the goalValue', () => {
-    renderChart({ goalValue: 2500 });
+  test('renders a dashed goal line spanning the flat goalValues', () => {
+    renderChart({ goalValues: [2500, 2500, 2500] });
 
-    expect(screen.getByTestId('goal-line').props.p1).toEqual({ x: 0, y: 2500 });
-    expect(screen.getByTestId('goal-line').props.p2).toEqual({
-      x: 60,
-      y: 2500,
-    });
+    const goalLine = screen.getByTestId('goal-line');
+    expect(goalLine.props.curveType).toBe('stepAfter');
+    expect(goalLine.props.points[0]).toMatchObject({ x: 0, y: 2500 });
+    expect(goalLine.props.points.at(-1)).toMatchObject({ x: 60, y: 2500 });
   });
 
-  test('renders no goal line when no goalValue is supplied', () => {
+  test('steps the goal line to the resolved value on the day it changed', () => {
+    renderChart({ goalValues: [2000, 2000, 2500] });
+
+    const goalLine = screen.getByTestId('goal-line');
+    // Interior points (skip the two synthetic edge points).
+    const interior = goalLine.props.points.slice(1, -1);
+    expect(interior.map((point: { y: number }) => point.y)).toEqual([
+      2000, 2000, 2500,
+    ]);
+  });
+
+  test('renders no goal line when no goalValues is supplied', () => {
     renderChart();
 
     expect(screen.queryByTestId('goal-line')).toBeNull();
   });
 
-  test('labels the y-axis in nice round steps up to the goal when it exceeds every bar', () => {
-    renderChart({ goalValue: 5000 });
+  test('labels the y-axis in nice round steps up to the highest goal when it exceeds every bar', () => {
+    renderChart({ goalValues: [5000, 5000, 5000] });
 
     const [yAxisConfig] = screen.getByTestId('cartesian-chart').props.yAxis;
     expect(yAxisConfig.tickValues).toEqual([0, 1000, 2000, 3000, 4000, 5000]);
@@ -230,13 +238,13 @@ describe('TrendBarChart', () => {
   // by index (`downsampleTicks`), which can silently skip an interior value — e.g. 6 values
   // downsampled to 5 drops index 2 (4000) because `Math.round(2.5)` rounds up to index 3.
   test('sets tickCount to match tickValues.length so no interior tick is silently dropped', () => {
-    renderChart({ goalValue: 5000 });
+    renderChart({ goalValues: [5000, 5000, 5000] });
 
     const [yAxisConfig] = screen.getByTestId('cartesian-chart').props.yAxis;
     expect(yAxisConfig.tickCount).toBe(yAxisConfig.tickValues.length);
   });
 
-  test('labels the y-axis in nice round steps from the data alone when no goalValue is supplied', () => {
+  test('labels the y-axis in nice round steps from the data alone when no goalValues is supplied', () => {
     renderChart();
 
     const [yAxisConfig] = screen.getByTestId('cartesian-chart').props.yAxis;

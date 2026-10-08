@@ -17,14 +17,22 @@ import {
   NO_ADAPTIVE_ADJUSTMENT,
   adaptiveWeightStepKg,
   applyAdaptiveLoadFactorKg,
+  carryDistanceFromKm,
+  carryDistanceToKm,
+  carryDistanceUnitLabel,
   calculateRampedWeightKg,
   decideAdaptiveAdjustment,
   distributeProgressionReps,
+  effectiveLoadKg,
   evaluateProgression,
+  isBodyweightModality,
   isCardioModality,
   isExerciseModality,
+  isWeightDistanceModality,
+  isWeightDurationModality,
   isWeightRampActive,
   resolveExerciseModality,
+  setVolumeKg as sharedSetVolumeKg,
   setsDurationMinutes,
   weightRampStepIndexes,
 } from '@workspace/shared';
@@ -44,10 +52,11 @@ import type { CreateExerciseEntryPayload } from '../services/api/exerciseApi';
 import {
   weightToKg,
   weightFromKg,
+  storedWeightInUnit,
   distanceFromKm,
   distanceToKm,
 } from './unitConversions';
-import { parseDecimalInput } from './numericInput';
+import { parseDecimalInput, parseSignedDecimalInput } from './numericInput';
 import { getDefaultRestSec } from './workoutSupersets';
 import { formatLocalizedNumber } from '../localization';
 import { wodScoreFormat } from './wodScore';
@@ -466,6 +475,20 @@ export function buildSessionSubtitle(
   return parts.join(' · ');
 }
 
+/**
+ * Set weight from a draft string. Only `bodyweight_reps` accepts a sign
+ * (added load or assistance). Every other modality keeps the unsigned
+ * parser, so a pasted minus does not become a negative load.
+ */
+export function parseSetWeight(
+  value: string | null | undefined,
+  modality: ExerciseModality
+): number {
+  return isBodyweightModality(modality)
+    ? parseSignedDecimalInput(value)
+    : parseDecimalInput(value);
+}
+
 export function buildExercisesPayload(
   exercises: WorkoutDraftExercise[],
   weightUnit: 'kg' | 'lbs',
@@ -476,6 +499,10 @@ export function buildExercisesPayload(
   // save that drops every prior row still reconciles instead of the id-less
   // 409. Older drafts omit the id.
   return exercises.map((exercise, index) => {
+    const modality = resolveSnapshotModality({
+      modality: exercise.exerciseModality,
+      category: exercise.exerciseCategory,
+    });
     // The server recomputes calories from duration and sets whenever
     // calories_burned is omitted; a user-edited value is sent as a manual
     // override for this save only.
@@ -484,7 +511,7 @@ export function buildExercisesPayload(
       : NaN;
 
     const sets = exercise.sets.map((set, setIndex) => {
-      const weight = parseDecimalInput(set.weight);
+      const weight = parseSetWeight(set.weight, modality);
       const reps = parseInt(set.reps, 10);
       const distance = parseDecimalInput(set.distance ?? '');
       // The server set UPDATE writes every column with `set.x ?? null`, so
@@ -497,7 +524,9 @@ export function buildExercisesPayload(
         weight: isNaN(weight) ? null : weightToKg(weight, weightUnit),
         reps: isNaN(reps) ? null : reps,
         duration: set.duration ?? null,
-        distance: isNaN(distance) ? null : distanceToKm(distance, distanceUnit),
+        distance: isNaN(distance)
+          ? null
+          : setDistanceToKm(distance, distanceUnit, modality),
         ...(set.restTime != null ? { rest_time: set.restTime } : {}),
         notes: set.notes ?? null,
         rpe: set.rpe ?? null,
@@ -505,11 +534,6 @@ export function buildExercisesPayload(
         completed_at: set.completedAt ?? null,
         is_pr: set.isPr ?? false,
       };
-    });
-
-    const modality = resolveSnapshotModality({
-      modality: exercise.exerciseModality,
-      category: exercise.exerciseCategory,
     });
 
     return {
@@ -572,21 +596,80 @@ export function estimateRepMaxKg(
   return oneRm / (1 + targetReps / 30);
 }
 
+/**
+ * Weight × reps for a set. A bodyweight exercise's set weight is added
+ * (positive) or assisting (negative) load, so its volume counts the lifter's
+ * body weight too — the same rule the server's reports use.
+ */
 export function setVolumeKg(
-  set: Pick<ExerciseEntrySetResponse, 'weight' | 'reps'>
+  set: Pick<ExerciseEntrySetResponse, 'weight' | 'reps'>,
+  modality: ExerciseModality = 'weight_reps',
+  bodyWeightKg: number | null = null
 ): number {
-  return (set.weight ?? 0) * (set.reps ?? 0);
+  return sharedSetVolumeKg(set, modality, bodyWeightKg);
+}
+
+/**
+ * The load a set moved, for its estimated maxes: the weight, or for a
+ * bodyweight exercise body weight plus the added or assisting weight. Null
+ * when a weighted exercise's set has no weight at all.
+ */
+export function setLoadKg(
+  weightKg: number | null,
+  modality: ExerciseModality,
+  bodyWeightKg: number | null
+): number | null {
+  if (!isBodyweightModality(modality)) return weightKg;
+  return effectiveLoadKg(weightKg, modality, bodyWeightKg);
 }
 
 /** Total working volume for an exercise entry. Warmup sets are excluded. */
-export function getExerciseVolumeKg(exercise: {
-  sets: WorkoutCardSet[];
-}): number {
+export function getExerciseVolumeKg(
+  exercise: {
+    sets: WorkoutCardSet[];
+    exercise_snapshot?: {
+      modality?: string | null;
+      category?: string | null;
+    } | null;
+  },
+  bodyWeightKg: number | null = null
+): number {
+  const modality = resolveSnapshotModality(exercise.exercise_snapshot);
   return exercise.sets.reduce(
     (total, set) =>
-      set.set_type === 'warmup' ? total : total + setVolumeKg(set),
+      isWarmupSetType(set.set_type)
+        ? total
+        : total + setVolumeKg(set, modality, bodyWeightKg),
     0
   );
+}
+
+/** Whether any exercise in the list is a bodyweight one (needs body weight). */
+export function hasBodyweightExercise(
+  exercises: readonly {
+    exercise_snapshot?: {
+      modality?: string | null;
+      category?: string | null;
+    } | null;
+  }[]
+): boolean {
+  return exercises.some((exercise) =>
+    isBodyweightModality(resolveSnapshotModality(exercise.exercise_snapshot))
+  );
+}
+
+/**
+ * A set weight for display, with the sign shown for a bodyweight exercise so
+ * "+20" (weighted) and "−30" (assisted) read as changes to body weight.
+ */
+export function formatSetWeightText(
+  formatted: string,
+  weightKg: number | null,
+  modality: ExerciseModality
+): string {
+  if (!isBodyweightModality(modality) || weightKg == null) return formatted;
+  if (weightKg > 0) return `+${formatted}`;
+  return formatted.replace(/^-/, '\u2212');
 }
 
 // --- Exercise modality ---
@@ -612,7 +695,55 @@ export function isDurationModality(modality: ExerciseModality): boolean {
   return modality === 'duration' || modality === 'duration_distance';
 }
 
-export { isCardioModality };
+export { isCardioModality, isWeightDistanceModality, isWeightDurationModality };
+
+/** Whether a set of this modality stores a duration in seconds. */
+export function modalityStoresDuration(modality: ExerciseModality): boolean {
+  return isDurationModality(modality) || isWeightDurationModality(modality);
+}
+
+/** Whether a set of this modality stores a distance (km). */
+export function modalityStoresDistance(modality: ExerciseModality): boolean {
+  return isCardioModality(modality) || isWeightDistanceModality(modality);
+}
+
+/**
+ * A set's distance in the unit it is edited and shown in: metres (yards when
+ * the app shows miles) for weight-and-distance carries, km or miles for
+ * everything else. Storage is always km.
+ */
+export function setDistanceFromKm(
+  km: number,
+  distanceUnit: 'km' | 'miles',
+  modality?: ExerciseModality | null
+): number {
+  return modality != null && isWeightDistanceModality(modality)
+    ? carryDistanceFromKm(km, distanceUnit)
+    : distanceFromKm(km, distanceUnit);
+}
+
+/** Inverse of `setDistanceFromKm`. */
+export function setDistanceToKm(
+  value: number,
+  distanceUnit: 'km' | 'miles',
+  modality?: ExerciseModality | null
+): number {
+  return modality != null && isWeightDistanceModality(modality)
+    ? carryDistanceToKm(value, distanceUnit)
+    : distanceToKm(value, distanceUnit);
+}
+
+/** Short unit label matching `setDistanceFromKm`. */
+export function setDistanceUnitLabel(
+  distanceUnit: 'km' | 'miles',
+  modality?: ExerciseModality | null
+): string {
+  return modality != null && isWeightDistanceModality(modality)
+    ? carryDistanceUnitLabel(distanceUnit)
+    : distanceUnit === 'miles'
+      ? 'mi'
+      : 'km';
+}
 
 /**
  * True when a workout card renders the Duration+Distance cardio form in place
@@ -674,6 +805,7 @@ export interface WorkoutCardSet {
   /** Raw draft strings backing the edit-mode controlled inputs (draft mapper only). */
   editWeightText?: string;
   editRepsText?: string;
+  editDistanceText?: string;
 }
 
 export interface WorkoutCardExercise {
@@ -722,14 +854,21 @@ export interface WorkoutCardExercise {
 
 /**
  * Adapt a form-draft exercise for the card stack. Weight parsing matches
- * `buildExercisesPayload` exactly (parseDecimalInput → weightToKg, NaN → null)
- * so what the card displays is what a save would persist.
+ * `buildExercisesPayload` exactly (the modality-gated weight parser, then
+ * weightToKg, NaN → null) so what the card displays is what a save would persist.
  */
 export function draftExerciseToCardExercise(
   exercise: WorkoutDraftExercise,
   weightUnit: 'kg' | 'lbs',
   distanceUnit: 'km' | 'miles' = 'km'
 ): WorkoutCardExercise {
+  const snapshot = exercise.snapshot ?? {
+    name: exercise.exerciseName,
+    category: exercise.exerciseCategory,
+    modality: exercise.exerciseModality ?? null,
+    images: exercise.images,
+  };
+  const modality = resolveSnapshotModality(snapshot);
   return {
     id: exercise.clientId,
     exercise_id: exercise.exerciseId,
@@ -742,14 +881,9 @@ export function draftExerciseToCardExercise(
     increment_value: exercise.incrementValue ?? 5,
     equipment_brand: exercise.equipmentBrand ?? null,
     ramp_increment: exercise.rampIncrement ?? null,
-    exercise_snapshot: exercise.snapshot ?? {
-      name: exercise.exerciseName,
-      category: exercise.exerciseCategory,
-      modality: exercise.exerciseModality ?? null,
-      images: exercise.images,
-    },
+    exercise_snapshot: snapshot,
     sets: exercise.sets.map((set, index) => {
-      const weight = parseDecimalInput(set.weight);
+      const weight = parseSetWeight(set.weight, modality);
       const reps = parseInt(set.reps, 10);
       const distance = parseDecimalInput(set.distance ?? '');
       return {
@@ -763,9 +897,12 @@ export function draftExerciseToCardExercise(
         rest_time: set.restTime ?? null,
         notes: set.notes ?? null,
         duration: set.duration ?? null,
-        distance: isNaN(distance) ? null : distanceToKm(distance, distanceUnit),
+        distance: isNaN(distance)
+          ? null
+          : setDistanceToKm(distance, distanceUnit, modality),
         editWeightText: set.weight,
         editRepsText: set.reps,
+        editDistanceText: set.distance ?? '',
       };
     }),
   };
@@ -842,6 +979,24 @@ export function formatRecentSessionSet(
           maximumFractionDigits: 1,
         })
       : null;
+  if (modality != null && isWeightDistanceModality(modality)) {
+    const dist =
+      set.distance != null
+        ? `${formatLocalizedNumber(
+            setDistanceFromKm(set.distance, distanceUnit, modality),
+            { maximumFractionDigits: 1 }
+          )} ${setDistanceUnitLabel(distanceUnit, modality)}`
+        : null;
+    const parts = [w, dist].filter((part): part is string => part != null);
+    return parts.length > 0 ? `${prefix}${parts.join(' × ')}` : '–';
+  }
+  if (modality != null && isWeightDurationModality(modality)) {
+    const parts = [
+      w,
+      set.duration != null ? formatDurationSeconds(set.duration) : null,
+    ].filter((part): part is string => part != null);
+    return parts.length > 0 ? `${prefix}${parts.join(' × ')}` : '–';
+  }
   if (w != null && set.reps != null) return `${prefix}${w} × ${set.reps}`;
   if (w != null) return `${prefix}${w}`;
   if (set.reps != null)
@@ -1137,19 +1292,21 @@ export function evaluateExerciseProgression(
       repGoal: config.rep_goal,
       incrementType,
       incrementValue: incrementIsWeight
-        ? weightFromKg(incrementValue, weightUnit)
+        ? storedWeightInUnit(incrementValue, weightUnit)
         : incrementValue,
       equipmentBrand: config.equipment_brand ?? null,
     },
     workingPreviousSets.length > 0
       ? {
+          // Rounded as they were typed, so the suggestion reads 95 lb rather
+          // than the 94.997… that float kg↔lb round trips add up to.
           baseWeight: firstWorking?.weight
-            ? weightFromKg(firstWorking.weight, weightUnit)
+            ? storedWeightInUnit(firstWorking.weight, weightUnit)
             : 0,
           sets: workingPreviousSets.map((s, idx) => ({
             setNumber: idx + 1,
             reps: s.reps ?? 0,
-            weight: s.weight ? weightFromKg(s.weight, weightUnit) : 0,
+            weight: s.weight ? storedWeightInUnit(s.weight, weightUnit) : 0,
           })),
         }
       : null
@@ -1542,7 +1699,10 @@ export function firstSetInputField(
   modality: ExerciseModality
 ): 'duration' | 'reps' | 'weight' {
   if (isDurationModality(modality)) return 'duration';
-  return modality === 'reps_only' ? 'reps' : 'weight';
+  // A bodyweight set's weight is optional (blank is body weight alone).
+  return modality === 'reps_only' || isBodyweightModality(modality)
+    ? 'reps'
+    : 'weight';
 }
 
 export function isDropSetType(setType: string | null | undefined): boolean {
@@ -1611,35 +1771,40 @@ export function isPrSet(
   // Null for a preserved entry whose exercise is gone; the `== null` guard
   // below then short-circuits, so a deleted exercise never earns a PR.
   let exerciseId: string | null | undefined;
+  let modality: ExerciseModality = 'weight_reps';
   for (const exercise of session.exercises) {
     const found = exercise.sets.find((s) => String(s.id) === candidateSetId);
     if (found) {
       candidate = found;
       exerciseId = exercise.exercise_id;
+      modality = resolveSnapshotModality(exercise.exercise_snapshot);
       break;
     }
   }
   if (!candidate || exerciseId == null) return false;
-  if (candidate.weight == null) return false;
+  const candidateWeight = prWeight(candidate.weight, modality);
+  if (candidateWeight == null) return false;
   if (isWarmupSetType(candidate.set_type)) return false;
 
   if (!(exerciseId in prBaseline)) return false;
   const baseline = prBaseline[exerciseId];
   if (baseline == null) return false;
 
+  const baselineWeight = prWeight(baseline.weight, modality);
   let best: { weight: number; reps: number | null } | null =
-    baseline.weight != null
-      ? { weight: baseline.weight, reps: baseline.reps }
+    baselineWeight != null
+      ? { weight: baselineWeight, reps: baseline.reps }
       : null;
 
   for (const exercise of session.exercises) {
     if (exercise.exercise_id !== exerciseId) continue;
     for (const s of exercise.sets) {
       if (String(s.id) === candidateSetId) continue;
-      if (s.weight == null) continue;
+      const weight = prWeight(s.weight, modality);
+      if (weight == null) continue;
       if (isWarmupSetType(s.set_type)) continue;
       if (completedSetIds[String(s.id)] == null) continue;
-      const contender = { weight: s.weight, reps: s.reps };
+      const contender = { weight, reps: s.reps };
       if (best == null || compareSetRecords(contender, best) > 0)
         best = contender;
     }
@@ -1648,11 +1813,23 @@ export function isPrSet(
   if (best == null) return false;
 
   return (
-    compareSetRecords(
-      { weight: candidate.weight, reps: candidate.reps },
-      best
-    ) > 0
+    compareSetRecords({ weight: candidateWeight, reps: candidate.reps }, best) >
+    0
   );
+}
+
+/**
+ * The weight a set is ranked on for a PR. A bodyweight set with no weight is
+ * body weight alone, so it ranks as +0 and a pure pull-up can still set a rep
+ * PR; the ranking stays on the added weight, which at a steady body weight
+ * orders sets the same way the total load does.
+ */
+function prWeight(
+  weight: number | null,
+  modality: ExerciseModality
+): number | null {
+  if (weight != null) return weight;
+  return isBodyweightModality(modality) ? 0 : null;
 }
 
 export function seedPrFromSession(session: PresetSessionResponse): PrSetMap {
@@ -1702,7 +1879,8 @@ export function buildWorkoutCompletionSummary(
   session: PresetSessionResponse,
   completedSetIds: CompletedSetMap,
   prSetIds: PrSetMap,
-  t: TFunction
+  t: TFunction,
+  bodyWeightKg: number | null = null
 ): WorkoutCompletionSummary {
   let completedSetCount = 0;
   let totalSetCount = 0;
@@ -1742,8 +1920,12 @@ export function buildWorkoutCompletionSummary(
         });
       }
       if (isWarmupSetType(set.set_type)) continue;
-      exerciseVolumeKg += setVolumeKg(set);
-      if (set.distance != null) totalDistanceKm += set.distance;
+      exerciseVolumeKg += setVolumeKg(set, modality, bodyWeightKg);
+      // Carry distances stay out of the workout's distance total: that tile
+      // reads as running/cycling distance.
+      if (set.distance != null && !isWeightDistanceModality(modality)) {
+        totalDistanceKm += set.distance;
+      }
       if (isDurationModality(modality)) {
         const seconds = effectiveSetDurationSec(set, modality);
         if (
@@ -2031,7 +2213,8 @@ export function buildActivitySetsPayload(
   originals: ReadonlyMap<string, ExerciseEntrySetResponse>,
   weightUnit: 'kg' | 'lbs',
   modality: ExerciseModality,
-  cardio?: CardioEffortValues
+  cardio?: CardioEffortValues,
+  distanceUnit: 'km' | 'miles' = 'km'
 ): ActivitySetPayload[] {
   if (cardio && draftSets.length === 0) {
     return [
@@ -2047,7 +2230,7 @@ export function buildActivitySetsPayload(
     ];
   }
   return draftSets.map((set, index) => {
-    const w = parseDecimalInput(set.weight);
+    const w = parseSetWeight(set.weight, modality);
     const r = parseInt(set.reps, 10);
     const original = originals.get(set.clientId);
     return {
@@ -2064,8 +2247,18 @@ export function buildActivitySetsPayload(
       set_number: index + 1,
       weight: isNaN(w) ? null : weightToKg(w, weightUnit),
       reps: isNaN(r) ? null : r,
-      ...(isDurationModality(modality)
+      ...(isDurationModality(modality) || isWeightDurationModality(modality)
         ? { duration: set.duration ?? null }
+        : {}),
+      ...(isWeightDistanceModality(modality)
+        ? (() => {
+            const distance = parseDecimalInput(set.distance ?? '');
+            return {
+              distance: isNaN(distance)
+                ? null
+                : setDistanceToKm(distance, distanceUnit, modality),
+            };
+          })()
         : {}),
       ...(cardio
         ? {
@@ -2113,7 +2306,7 @@ export function buildPresetExercisesPayload(
         equipment_brand: exercise.equipmentBrand ?? null,
         ramp_increment: exercise.rampIncrement ?? null,
         sets: exercise.sets.map((set, setIndex) => {
-          const weight = parseDecimalInput(set.weight);
+          const weight = parseSetWeight(set.weight, modality);
           const reps = parseInt(set.reps, 10);
           const distance = parseDecimalInput(set.distance ?? '');
           return {
@@ -2124,12 +2317,12 @@ export function buildPresetExercisesPayload(
             // Modality-gated like the live builders: a session's junk duration
             // on a weights exercise must not become preset structure, and
             // distance is only meaningful on cardio sets.
-            duration: isDurationModality(modality)
+            duration: modalityStoresDuration(modality)
               ? (set.duration ?? null)
               : null,
             distance:
-              isCardioModality(modality) && !isNaN(distance)
-                ? distanceToKm(distance, distanceUnit)
+              modalityStoresDistance(modality) && !isNaN(distance)
+                ? setDistanceToKm(distance, distanceUnit, modality)
                 : null,
             rest_time: set.restTime ?? null,
             notes: set.notes ?? null,
@@ -2246,10 +2439,10 @@ function canonicalizeSessionSet(
     set_type: set.set_type ?? 'normal',
     reps,
     weight: canonicalDecimal(weight),
-    duration: isDurationModality(modality)
+    duration: modalityStoresDuration(modality)
       ? (set.duration ?? planned?.duration ?? null)
       : null,
-    distance: isCardioModality(modality)
+    distance: modalityStoresDistance(modality)
       ? canonicalDecimal(set.distance ?? planned?.distance ?? null)
       : null,
     rest_time: isCardioModality(modality) ? 0 : (set.rest_time ?? null),
@@ -2267,8 +2460,8 @@ function canonicalizePresetSet(
     set_type: set.set_type ?? 'normal',
     reps: set.reps ?? null,
     weight: canonicalDecimal(set.weight ?? null),
-    duration: isDurationModality(modality) ? (set.duration ?? null) : null,
-    distance: isCardioModality(modality)
+    duration: modalityStoresDuration(modality) ? (set.duration ?? null) : null,
+    distance: modalityStoresDistance(modality)
       ? canonicalDecimal(set.distance ?? null)
       : null,
     rest_time: isCardioModality(modality) ? 0 : (set.rest_time ?? null),

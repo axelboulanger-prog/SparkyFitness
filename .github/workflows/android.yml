@@ -1,10 +1,12 @@
 name: Build Android APK
 
+# Runs on publish rather than on the v* tag push. release-please.yml creates the
+# tag together with the draft, before anyone has approved the release, and a tag
+# pushed with GITHUB_TOKEN would not trigger this workflow at all. On a release
+# event github.ref is still refs/tags/<tag>, so the steps below are unchanged.
 on:
-  push:
-    #    branches: [ main ]
-    tags:
-      - "v*"
+  release:
+    types: [published]
   workflow_dispatch:
 
 jobs:
@@ -34,6 +36,8 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
+        env:
+          GOOGLE_MAPS_ANDROID_API_KEY: ${{ secrets.GOOGLE_MAPS_ANDROID_API_KEY }}
         run: |
           pnpm install --frozen-lockfile
           cd SparkyFitnessMobile

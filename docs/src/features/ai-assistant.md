@@ -69,7 +69,7 @@ Perplexity has retired the legacy OpenAI-compatible Chat Completions API (`/v1/c
 1. **Direct Perplexity Setup (Recommended):**
    - In **AI Settings**, select **Perplexity AI** from the provider dropdown.
    - Enter your Perplexity API key from `console.perplexity.ai`.
-   - Select your preferred model (`sonar`, `sonar-pro`, or `sonar-reasoning`). SparkyFitness automatically connects to Perplexity's Agent API (`/v1/responses`).
+   - Select your preferred preset tier (`fast`, `low`, `medium`, `high`, `xhigh`) or enter a custom model. SparkyFitness automatically connects to Perplexity's Agent API (`/v1/responses`) using the appropriate preset.
 
 2. **Via OpenRouter (Alternative):**
    - In **AI Settings**, select **OpenRouter** as the provider.

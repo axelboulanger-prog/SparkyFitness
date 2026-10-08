@@ -2,7 +2,11 @@ import chatRepository from '../models/chatRepository.js';
 import measurementRepository from '../models/measurementRepository.js';
 import preferenceRepository from '../models/preferenceRepository.js';
 import { log } from '../config/logging.js';
-import { getDefaultModel, getOpenAiCompatibleBaseUrl } from '../ai/config.js';
+import {
+  getDefaultModel,
+  getOpenAiCompatibleBaseUrl,
+  getPerplexityPreset,
+} from '../ai/config.js';
 import {
   dispatchAiRequest,
   requiresApiKey,
@@ -1000,9 +1004,140 @@ function createPerplexityFetch(baseFetch: typeof fetch = fetch): typeof fetch {
           input?: unknown;
           [k: string]: unknown;
         };
-        // Perplexity Agent API requires `input` (array of messages or text)
+        // Perplexity Agent API requires `input` (array of messages or text) and rejects `messages`
         if (!bodyObj.input && Array.isArray(bodyObj.messages)) {
-          bodyObj.input = bodyObj.messages;
+          bodyObj.input = bodyObj.messages.map((msg) => {
+            if (!Array.isArray(msg.content)) return msg;
+            return {
+              ...msg,
+              content: msg.content.map((part) => {
+                if (typeof part === 'object' && part !== null) {
+                  const p = part as {
+                    type?: string;
+                    text?: string;
+                    image_url?: { url?: string } | string;
+                  };
+                  if (p.type === 'text' && typeof p.text === 'string') {
+                    return { type: 'input_text', text: p.text };
+                  }
+                  if (p.type === 'image_url') {
+                    const url =
+                      typeof p.image_url === 'object' && p.image_url !== null
+                        ? p.image_url.url
+                        : p.image_url;
+                    return { type: 'input_image', image_url: url };
+                  }
+                }
+                return part;
+              }),
+            };
+          });
+          delete bodyObj.messages;
+          delete bodyObj.temperature; // Agent API presets reject temperature
+          // Convert Chat Completions tool-call history to Agent API input items
+          if (Array.isArray(bodyObj.input)) {
+            const converted: unknown[] = [];
+            for (const item of bodyObj.input as Array<
+              Record<string, unknown>
+            >) {
+              const emptyContent =
+                item.content === null ||
+                item.content === undefined ||
+                item.content === '' ||
+                (Array.isArray(item.content) && item.content.length === 0);
+              if (item.role === 'assistant' && Array.isArray(item.tool_calls)) {
+                if (!emptyContent) {
+                  converted.push({ role: 'assistant', content: item.content });
+                }
+                for (const call of item.tool_calls as Array<{
+                  id?: string;
+                  function?: { name?: string; arguments?: string };
+                }>) {
+                  converted.push({
+                    type: 'function_call',
+                    call_id: call.id,
+                    name: call.function?.name,
+                    arguments: call.function?.arguments ?? '{}',
+                  });
+                }
+              } else if (item.role === 'tool') {
+                const out =
+                  typeof item.content === 'string'
+                    ? item.content
+                    : JSON.stringify(item.content ?? '');
+                converted.push({
+                  type: 'function_call_output',
+                  call_id: item.tool_call_id,
+                  output: out.length > 0 ? out : '{}',
+                });
+              } else if (item.role === 'assistant' && emptyContent) {
+                continue;
+              } else {
+                converted.push(item);
+              }
+            }
+            bodyObj.input = converted;
+          }
+          // Agent API expects flat function tools, not the nested Chat Completions shape
+          if (Array.isArray(bodyObj.tools)) {
+            bodyObj.tools = (
+              bodyObj.tools as Array<Record<string, unknown>>
+            ).map((tool) => {
+              const fn = tool.function as
+                | {
+                    name?: string;
+                    description?: string;
+                    parameters?: unknown;
+                    strict?: boolean;
+                  }
+                | undefined;
+              if (tool.type === 'function' && fn) {
+                return {
+                  type: 'function',
+                  name: fn.name,
+                  description: fn.description ?? '',
+                  parameters: fn.parameters ?? {
+                    type: 'object',
+                    properties: {},
+                  },
+                  ...(fn.strict !== undefined ? { strict: fn.strict } : {}),
+                };
+              }
+              return tool;
+            });
+          }
+          const toolChoice = bodyObj.tool_choice as
+            | { type?: string; function?: { name?: string } }
+            | string
+            | undefined;
+          if (
+            toolChoice &&
+            typeof toolChoice === 'object' &&
+            toolChoice.type === 'function' &&
+            toolChoice.function?.name
+          ) {
+            bodyObj.tool_choice = {
+              type: 'function',
+              name: toolChoice.function.name,
+            };
+          }
+
+          const rawModel =
+            typeof bodyObj.model === 'string' ? bodyObj.model : 'fast';
+          const preset = getPerplexityPreset(rawModel);
+          if (preset) {
+            bodyObj.preset = preset;
+            delete bodyObj.model;
+          } else {
+            const modelLower = rawModel.toLowerCase();
+            if (
+              modelLower.startsWith('anthropic/') ||
+              modelLower.includes('claude')
+            ) {
+              bodyObj.max_output_tokens = bodyObj.max_output_tokens ?? 4096;
+            }
+          }
+
           modifiedInit = {
             ...init,
             body: JSON.stringify(bodyObj),

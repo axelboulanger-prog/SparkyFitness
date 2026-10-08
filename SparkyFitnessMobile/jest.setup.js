@@ -683,6 +683,26 @@ jest.mock('react-native-pager-view', () => {
   return { __esModule: true, default: MockPagerView };
 });
 
+// Mock react-native-maps. Its package ships untranspiled native specs, and the
+// map is native-only anyway. Each piece renders a View carrying its props so
+// suites can assert what was drawn (`map-view`, `map-polyline`, `map-marker`).
+jest.mock('react-native-maps', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  const piece = (testID) => {
+    const Piece = ({ children, ...props }) =>
+      React.createElement(View, { testID, ...props }, children);
+    Piece.displayName = testID;
+    return Piece;
+  };
+  return {
+    __esModule: true,
+    default: piece('map-view'),
+    Polyline: piece('map-polyline'),
+    Marker: piece('map-marker'),
+  };
+});
+
 // Mock @gorhom/bottom-sheet
 jest.mock('@gorhom/bottom-sheet', () => {
   const React = require('react');

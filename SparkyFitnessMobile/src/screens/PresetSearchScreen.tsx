@@ -226,8 +226,8 @@ const PresetSearchScreen: React.FC<PresetSearchScreenProps> = ({
                 {activePlan?.next_assignment?.workout_preset_id != null &&
                   Number(activePlan.next_assignment.workout_preset_id) ===
                     Number(item.id) && (
-                    <View className="bg-primary/20 px-1.5 py-0.5 rounded">
-                      <Text className="text-[10px] text-primary font-bold">
+                    <View className="bg-accent-primary/20 px-1.5 py-0.5 rounded">
+                      <Text className="text-[10px] text-accent-primary font-bold">
                         {t('exerciseSummary.suggestedPlanSession', {
                           defaultValue: 'Suggested',
                         })}

@@ -1,3 +1,4 @@
+import { useLiveHeartRateStore } from '../../src/stores/liveHeartRateStore';
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import { AppState, type AppStateStatus } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -10,6 +11,7 @@ import {
 } from '../../src/stores/activeWorkoutStore';
 import {
   updateWorkout,
+  deleteWorkout,
   attachExerciseEntryWatchTelemetry,
 } from '../../src/services/api/exerciseApi';
 import { addLog } from '../../src/services/LogService';
@@ -27,6 +29,7 @@ import { clearServerConfigCache } from '../../src/services/storage';
 
 jest.mock('../../src/services/api/exerciseApi', () => ({
   updateWorkout: jest.fn(),
+  deleteWorkout: jest.fn(),
   attachExerciseEntryWatchTelemetry: jest.fn(),
 }));
 
@@ -226,6 +229,7 @@ describe('useWatchWorkoutBridge', () => {
       ...queuedHeartRateBatches,
     ]);
     __resetActiveWorkoutStoreForTests();
+    useLiveHeartRateStore.setState({ reading: null });
     mockUpdateWorkout.mockImplementation(async () => getStore().session!);
     mockAttachTelemetry.mockResolvedValue(undefined);
   });
@@ -233,8 +237,192 @@ describe('useWatchWorkoutBridge', () => {
   it('subscribes to all three watch events when enabled', () => {
     renderHook(() => useWatchWorkoutBridge(true));
     expect(mockListeners.has('onSetCompleted')).toBe(true);
+    expect(mockListeners.has('onRestChanged')).toBe(true);
     expect(mockListeners.has('onHeartRateBatch')).toBe(true);
     expect(mockListeners.has('onWorkoutStop')).toBe(true);
+  });
+
+  describe('set timer started on the watch', () => {
+    const fire = (payload: Record<string, unknown>) =>
+      act(() => {
+        mockListeners.get('onSetTimerStarted')!(payload);
+      });
+
+    beforeEach(() => {
+      useActiveWorkoutStore.setState({
+        sessionId: 'session-1',
+        setTimerStartedAt: {},
+        completedSetIds: {},
+      });
+    });
+
+    it('starts the phone stopwatch from the watch start time', () => {
+      renderHook(() => useWatchWorkoutBridge(true));
+      const startedAt = Date.now() - 12_000;
+      fire({ sessionId: 'session-1', setId: '101', startedAt });
+      expect(getStore().setTimerStartedAt['101']).toBe(startedAt);
+    });
+
+    it('keeps a stopwatch that is already running', () => {
+      const earlier = Date.now() - 30_000;
+      useActiveWorkoutStore.setState({ setTimerStartedAt: { '101': earlier } });
+      renderHook(() => useWatchWorkoutBridge(true));
+      fire({ sessionId: 'session-1', setId: '101', startedAt: Date.now() });
+      expect(getStore().setTimerStartedAt['101']).toBe(earlier);
+    });
+
+    it('ignores another session, a logged set, and a stale start', () => {
+      useActiveWorkoutStore.setState({ completedSetIds: { '102': 1000 } });
+      renderHook(() => useWatchWorkoutBridge(true));
+      fire({ sessionId: 'other', setId: '101', startedAt: Date.now() });
+      fire({ sessionId: 'session-1', setId: '102', startedAt: Date.now() });
+      fire({
+        sessionId: 'session-1',
+        setId: '103',
+        startedAt: Date.now() - 4 * 60 * 60 * 1000,
+      });
+      expect(getStore().setTimerStartedAt).toEqual({});
+    });
+
+    it('ignores a start from an earlier arm of the same session', () => {
+      const armedAt = Date.now() - 60_000;
+      useActiveWorkoutStore.setState({ watchArmedAt: armedAt });
+      renderHook(() => useWatchWorkoutBridge(true));
+      fire({
+        sessionId: 'session-1',
+        setId: '101',
+        startedAt: Date.now(),
+        armedAt: armedAt - 3_600_000,
+      });
+      expect(getStore().setTimerStartedAt).toEqual({});
+      fire({
+        sessionId: 'session-1',
+        setId: '101',
+        startedAt: Date.now(),
+        armedAt,
+      });
+      expect(Object.keys(getStore().setTimerStartedAt)).toEqual(['101']);
+    });
+  });
+
+  describe('set timer stopped on the watch', () => {
+    const fire = (payload: Record<string, unknown>) =>
+      act(() => {
+        mockListeners.get('onSetTimerStopped')!(payload);
+      });
+    let startedAt = 0;
+
+    beforeEach(() => {
+      startedAt = Date.now() - 20_000;
+      useActiveWorkoutStore.getState().startWorkout(makeSession());
+      useActiveWorkoutStore.setState({
+        sessionId: 'session-1',
+        setTimerStartedAt: { '101': startedAt },
+        completedSetIds: {},
+      });
+    });
+
+    it('stops the phone stopwatch and keeps the wrist time as the duration', () => {
+      renderHook(() => useWatchWorkoutBridge(true));
+      fire({ sessionId: 'session-1', setId: '101', seconds: 19, startedAt });
+      expect(getStore().setTimerStartedAt['101']).toBeUndefined();
+      expect(getStore().session!.exercises[0].sets[0].duration).toBe(19);
+    });
+
+    it('ignores a stop from an earlier run of the same set', () => {
+      renderHook(() => useWatchWorkoutBridge(true));
+      fire({
+        sessionId: 'session-1',
+        setId: '101',
+        seconds: 19,
+        startedAt: startedAt - 30_000,
+      });
+      expect(getStore().setTimerStartedAt['101']).toBe(startedAt);
+      expect(getStore().session!.exercises[0].sets[0].duration).not.toBe(19);
+    });
+
+    it('accepts a stop whose start the phone clock clamped forward', () => {
+      useActiveWorkoutStore.setState({ setTimerStartedAt: {} });
+      renderHook(() => useWatchWorkoutBridge(true));
+      const watchStart = Date.now() + 5_000;
+      act(() => {
+        mockListeners.get('onSetTimerStarted')!({
+          sessionId: 'session-1',
+          setId: '101',
+          startedAt: watchStart,
+        });
+      });
+      expect(getStore().setTimerStartedAt['101']).toBeLessThan(watchStart);
+      fire({
+        sessionId: 'session-1',
+        setId: '101',
+        seconds: 19,
+        startedAt: watchStart,
+      });
+      expect(getStore().setTimerStartedAt['101']).toBeUndefined();
+      expect(getStore().session!.exercises[0].sets[0].duration).toBe(19);
+    });
+
+    it('ignores another session, a logged set and a zero time', () => {
+      useActiveWorkoutStore.setState({ completedSetIds: { '102': 1000 } });
+      renderHook(() => useWatchWorkoutBridge(true));
+      fire({ sessionId: 'other', setId: '101', seconds: 19, startedAt });
+      fire({ sessionId: 'session-1', setId: '102', seconds: 19, startedAt });
+      fire({ sessionId: 'session-1', setId: '101', seconds: 0, startedAt });
+      expect(getStore().setTimerStartedAt['101']).toBeDefined();
+    });
+  });
+
+  describe('rest changed on the watch', () => {
+    const resting = (endsAt: number) => ({
+      state: 'resting' as const,
+      durationSec: 90,
+      endsAt,
+      pausedRemainingMs: null,
+      scheduledNotificationId: null,
+      instanceToken: 1,
+    });
+    const fire = (payload: Record<string, unknown>) =>
+      act(() => {
+        mockListeners.get('onRestChanged')!(payload);
+      });
+
+    beforeEach(() => {
+      useActiveWorkoutStore.setState({ sessionId: 'session-1' });
+    });
+
+    it('skips the phone rest when the watch skips the same rest', () => {
+      const endsAt = Date.now() + 60_000;
+      useActiveWorkoutStore.setState({ rest: resting(endsAt) });
+      renderHook(() => useWatchWorkoutBridge(true));
+      fire({ sessionId: 'session-1', previousEndsAt: endsAt + 800 });
+      expect(getStore().rest.state).toBe('ready');
+    });
+
+    it('moves the phone rest by the watch change, once', () => {
+      const endsAt = Date.now() + 60_000;
+      useActiveWorkoutStore.setState({ rest: resting(endsAt) });
+      renderHook(() => useWatchWorkoutBridge(true));
+      const payload = {
+        sessionId: 'session-1',
+        previousEndsAt: endsAt,
+        endsAt: endsAt + 15_000,
+      };
+      fire(payload);
+      expect(getStore().rest.endsAt).toBe(endsAt + 15_000);
+      // The same message delivered again finds the rest already moved.
+      fire(payload);
+      expect(getStore().rest.endsAt).toBe(endsAt + 15_000);
+    });
+
+    it('ignores a change meant for a different rest or session', () => {
+      const endsAt = Date.now() + 60_000;
+      useActiveWorkoutStore.setState({ rest: resting(endsAt) });
+      renderHook(() => useWatchWorkoutBridge(true));
+      fire({ sessionId: 'session-1', previousEndsAt: endsAt - 90_000 });
+      fire({ sessionId: 'other', previousEndsAt: endsAt });
+      expect(getStore().rest).toMatchObject({ state: 'resting', endsAt });
+    });
   });
 
   it('does not subscribe when disabled', () => {
@@ -327,6 +515,53 @@ describe('useWatchWorkoutBridge', () => {
     expect(getStore().completedSetIds['101']).toBeDefined();
   });
 
+  it('writes the carry distance the watch entered as km', async () => {
+    renderHook(() => useWatchWorkoutBridge(true));
+    act(() => {
+      getStore().startWorkout(makeSession());
+    });
+
+    await act(async () => {
+      fire('onSetCompleted', {
+        clientId: 'client-1',
+        sessionId: 'session-1',
+        setId: '101',
+        weightKg: 40,
+        distanceKm: 0.03,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const set = getStore().session!.exercises[0].sets[0];
+    expect(set.weight).toBe(40);
+    expect(set.distance).toBe(0.03);
+    expect(getStore().completedSetIds['101']).toBeDefined();
+  });
+
+  it('writes the hold the watch counted down, and leaves reps alone', async () => {
+    renderHook(() => useWatchWorkoutBridge(true));
+    act(() => {
+      getStore().startWorkout(makeSession());
+    });
+
+    await act(async () => {
+      fire('onSetCompleted', {
+        clientId: 'client-1',
+        sessionId: 'session-1',
+        setId: '101',
+        duration: 32,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const set = getStore().session!.exercises[0].sets[0];
+    expect(set.duration).toBe(32);
+    expect(set.reps).toBe(10);
+    expect(getStore().completedSetIds['101']).toBeDefined();
+  });
+
   it('leaves planned values alone when the watch sends none', async () => {
     renderHook(() => useWatchWorkoutBridge(true));
     act(() => {
@@ -399,6 +634,127 @@ describe('useWatchWorkoutBridge', () => {
     expect(mockUpdateWorkout).toHaveBeenCalledTimes(1);
   });
 
+  it('clears a live-start session and deletes it from the diary on workoutDiscard, without attaching heart rate', async () => {
+    const mockDelete = deleteWorkout as jest.MockedFunction<
+      typeof deleteWorkout
+    >;
+    mockDelete.mockResolvedValue(undefined);
+    renderHook(() => useWatchWorkoutBridge(true));
+    act(() => {
+      getStore().startWorkout(makeSession(), { createdByLiveStart: true });
+    });
+    act(() => {
+      fire('onHeartRateBatch', {
+        sessionId: 'session-1',
+        exerciseEntryId: 'ex-uuid-1',
+        samples: [
+          { t: '2026-09-17T10:00:00.000Z', bpm: 120 },
+          { t: '2026-09-17T10:00:10.000Z', bpm: 128 },
+        ],
+      });
+    });
+
+    await act(async () => {
+      fire('onWorkoutDiscard', { sessionId: 'session-1' });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getStore().sessionId).toBeNull();
+    expect(mockDelete).toHaveBeenCalledWith('session-1');
+    expect(mockAttachTelemetry).not.toHaveBeenCalled();
+    expect(mockUpdateWorkout).not.toHaveBeenCalled();
+  });
+
+  it('only clears, without deleting, a discarded session that was not created by the live start', async () => {
+    const mockDelete = deleteWorkout as jest.MockedFunction<
+      typeof deleteWorkout
+    >;
+    mockDelete.mockClear();
+    renderHook(() => useWatchWorkoutBridge(true));
+    act(() => {
+      getStore().startWorkout(makeSession());
+    });
+
+    await act(async () => {
+      fire('onWorkoutDiscard', { sessionId: 'session-1' });
+      await Promise.resolve();
+    });
+
+    expect(getStore().sessionId).toBeNull();
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it('attaches telemetry for a session that is opened again after a watch discard', async () => {
+    renderHook(() => useWatchWorkoutBridge(true));
+    act(() => {
+      getStore().startWorkout(makeSession());
+    });
+    await act(async () => {
+      fire('onWorkoutDiscard', { sessionId: 'session-1' });
+      await Promise.resolve();
+    });
+    expect(getStore().sessionId).toBeNull();
+
+    act(() => {
+      getStore().startWorkout(makeSession());
+    });
+    act(() => {
+      fire('onHeartRateBatch', {
+        sessionId: 'session-1',
+        exerciseEntryId: 'ex-uuid-1',
+        samples: [
+          { t: '2026-09-17T10:00:00.000Z', bpm: 120 },
+          { t: '2026-09-17T10:00:10.000Z', bpm: 128 },
+        ],
+      });
+    });
+    await act(async () => {
+      fire('onWorkoutStop', { sessionId: 'session-1' });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockAttachTelemetry).toHaveBeenCalledWith(
+      'ex-uuid-1',
+      expect.objectContaining({ hrSamples: expect.any(Array) })
+    );
+  });
+
+  it('ignores a workoutDiscard for a session that is not live', async () => {
+    renderHook(() => useWatchWorkoutBridge(true));
+    act(() => {
+      getStore().startWorkout(makeSession());
+    });
+
+    await act(async () => {
+      fire('onWorkoutDiscard', { sessionId: 'other-session' });
+      await Promise.resolve();
+    });
+
+    expect(getStore().sessionId).toBe('session-1');
+  });
+
+  it('ignores a workoutDiscard from an earlier arm of the same session', async () => {
+    const mockDelete = deleteWorkout as jest.MockedFunction<
+      typeof deleteWorkout
+    >;
+    mockDelete.mockClear();
+    renderHook(() => useWatchWorkoutBridge(true));
+    act(() => {
+      getStore().startWorkout(makeSession(), { createdByLiveStart: true });
+      useActiveWorkoutStore.setState({ watchArmedAt: 2_000_000 });
+    });
+
+    await act(async () => {
+      fire('onWorkoutDiscard', { sessionId: 'session-1', armedAt: 1_000_000 });
+      await Promise.resolve();
+    });
+
+    expect(getStore().sessionId).toBe('session-1');
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
   it('buffers heart-rate batches for the matching session and attaches them on workoutStop', async () => {
     renderHook(() => useWatchWorkoutBridge(true));
     act(() => {
@@ -434,6 +790,78 @@ describe('useWatchWorkoutBridge', () => {
       ],
     });
     expect(getStore().sessionId).toBeNull();
+  });
+
+  it("puts the newest sample of a live batch on screen, not an ended workout's", async () => {
+    renderHook(() => useWatchWorkoutBridge(true));
+    act(() => {
+      getStore().startWorkout(makeSession());
+    });
+
+    act(() => {
+      fire('onHeartRateBatch', {
+        sessionId: 'session-1',
+        exerciseEntryId: 'ex-uuid-1',
+        samples: [
+          { t: '2026-09-17T10:00:10.000Z', bpm: 128 },
+          { t: '2026-09-17T10:00:00.000Z', bpm: 120 },
+        ],
+      });
+      fire('onHeartRateBatch', {
+        sessionId: 'other-session',
+        exerciseEntryId: 'ex-uuid-1',
+        samples: [{ t: '2026-09-17T10:00:20.000Z', bpm: 200 }],
+      });
+    });
+
+    // Batches apply once the saved telemetry buffer has been restored.
+    await waitFor(() =>
+      expect(useLiveHeartRateStore.getState().reading).toEqual({
+        sessionId: 'session-1',
+        exerciseEntryId: 'ex-uuid-1',
+        bpm: 128,
+        at: Date.parse('2026-09-17T10:00:10.000Z'),
+      })
+    );
+  });
+
+  it('shows a live reading as soon as the watch sends it, for the live session only', () => {
+    renderHook(() => useWatchWorkoutBridge(true));
+    act(() => {
+      getStore().startWorkout(makeSession());
+    });
+    const at = Date.now();
+
+    act(() => {
+      fire('onLiveHeartRate', {
+        sessionId: 'session-1',
+        exerciseEntryId: 'ex-uuid-1',
+        bpm: 131.4,
+        at,
+      });
+    });
+    expect(useLiveHeartRateStore.getState().reading).toEqual({
+      sessionId: 'session-1',
+      exerciseEntryId: 'ex-uuid-1',
+      bpm: 131,
+      at,
+    });
+
+    act(() => {
+      fire('onLiveHeartRate', {
+        sessionId: 'other-session',
+        exerciseEntryId: 'ex-uuid-1',
+        bpm: 190,
+        at: at + 1000,
+      });
+      fire('onLiveHeartRate', {
+        sessionId: 'session-1',
+        exerciseEntryId: 'ex-uuid-1',
+        bpm: 0,
+        at: at + 2000,
+      });
+    });
+    expect(useLiveHeartRateStore.getState().reading?.bpm).toBe(131);
   });
 
   it('skips attaching heart rate for an exercise with fewer than two samples', async () => {
@@ -513,7 +941,8 @@ describe('useWatchWorkoutBridge', () => {
 
     expect(mockStopWorkout).toHaveBeenCalledWith(
       'session-1',
-      expect.any(String)
+      expect.any(String),
+      false
     );
     expect(mockAttachTelemetry).toHaveBeenCalledWith('ex-uuid-1', {
       hrSamples: [
@@ -521,6 +950,34 @@ describe('useWatchWorkoutBridge', () => {
         { t: '2026-09-17T10:00:10.000Z', bpm: 128 },
       ],
     });
+  });
+
+  it('tells the watch to drop the workout when the phone discards it', async () => {
+    renderHook(() => useWatchWorkoutBridge(true));
+    act(() => {
+      getStore().startWorkout(makeSession());
+    });
+    act(() => {
+      fire('onHeartRateBatch', {
+        sessionId: 'session-1',
+        exerciseEntryId: 'ex-uuid-1',
+        samples: [{ t: '2026-09-17T10:00:00.000Z', bpm: 120 }],
+      });
+    });
+    mockAttachTelemetry.mockClear();
+
+    await act(async () => {
+      getStore().clearWorkout({ discarded: true });
+      await Promise.resolve();
+    });
+
+    expect(mockStopWorkout).toHaveBeenCalledWith(
+      'session-1',
+      expect.any(String),
+      true
+    );
+    // A discarded workout's heart rate is never attached.
+    expect(mockAttachTelemetry).not.toHaveBeenCalled();
   });
 
   it('attributes the watch drain that arrives after the phone ends the workout', async () => {
@@ -1018,6 +1475,7 @@ describe('useWatchWorkoutBridge', () => {
       { initialProps: { connected: false } }
     );
     expect(mockListeners.has('onSetCompleted')).toBe(true);
+    expect(mockListeners.has('onRestChanged')).toBe(true);
     expect(mockListeners.has('onHeartRateBatch')).toBe(true);
     expect(mockListeners.has('onWorkoutStop')).toBe(true);
     await waitFor(() => {

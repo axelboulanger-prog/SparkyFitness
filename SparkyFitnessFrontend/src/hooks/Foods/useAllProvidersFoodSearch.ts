@@ -49,6 +49,10 @@ export type ExternalResultWrapper =
   | {
       provider_type: 'swissfood';
       food: Food;
+    }
+  | {
+      provider_type: 'canadian-nutrient-file';
+      food: Food;
     };
 
 // Normalised per-provider payload returned by each fan-out query.
