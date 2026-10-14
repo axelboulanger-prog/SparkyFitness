@@ -16,7 +16,7 @@ import {
   VitaminCalculationAlgorithmLabels,
   SugarCalculationAlgorithm,
   SugarCalculationAlgorithmLabels,
-} from '@/types/nutrientAlgorithms';
+} from '@workspace/shared';
 
 export interface CalculationSettingsProps {
   localFatBreakdownAlgorithm: FatBreakdownAlgorithm;

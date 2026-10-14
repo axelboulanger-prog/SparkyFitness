@@ -183,6 +183,7 @@ describe.runIf(RUN)('RLS permission matrix', () => {
     pregnancy_contractions: 'owner',
     pregnancy_kick_sessions: 'owner',
     pregnancy_photos: 'owner',
+    run_programs: 'owner',
     user_cycle_display_preferences: 'owner',
     user_fasting_preferences: 'owner',
     user_mood_display_preferences: 'owner',

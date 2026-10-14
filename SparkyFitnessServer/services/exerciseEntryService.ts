@@ -10,9 +10,22 @@ import preferenceRepository from '../models/preferenceRepository.js';
 import userRepository from '../models/userRepository.js';
 import { parseISO, isValid } from 'date-fns';
 import {
+  instantToDay,
   setsDurationMinutes,
+  type AttachExerciseEntryGpsTrackRequest,
   type HeartRateSampleRequest,
 } from '@workspace/shared';
+import { getClient } from '../db/poolManager.js';
+import { loadUserTimezone } from '../utils/timezoneLoader.js';
+import { describeError } from '../utils/errors.js';
+import { upsertSamplesByDay } from './healthMetricSampleWriter.js';
+import * as workoutTelemetryRepo from '../models/workoutTelemetryRepository.js';
+import {
+  deriveLaps,
+  deriveWorkoutTelemetry,
+  type LapWindow,
+  type TelemetryGpsPoint,
+} from './workoutTelemetryDerivation.js';
 import {
   computeHrZones,
   resolveMaxHr,
@@ -310,7 +323,9 @@ async function attachWatchTelemetryToExerciseEntry(
   // Zones need the series; a calories-only post has nothing to bucket.
   // Stale-snapshot rejection (and the zone write) happens under FOR UPDATE
   // inside applyWatchTelemetryAtomically so two in-flight flushes cannot
-  // both pass the check against the same pre-lock row.
+  // both pass the check against the same pre-lock row. The series write is
+  // the same hook: it runs only when that snapshot was accepted, and before
+  // the lock is released, so an older flush cannot store samples afterwards.
   let zones: WatchTelemetryZoneSpec[] | null = null;
   if (hrSamples && hrSamples.length > 0) {
     const samples: HrSample[] = hrSamples;
@@ -324,17 +339,220 @@ async function attachWatchTelemetryToExerciseEntry(
     zones = computeHrZones(samples, maxHr);
   }
 
-  await exerciseEntryRepository.applyWatchTelemetryAtomically(
-    exerciseEntryId,
-    userId,
-    actingUserId,
-    fields,
-    zones
-  );
+  if (hrSamples && hrSamples.length > 0) {
+    const accepted = hrSamples;
+    await exerciseEntryRepository.applyWatchTelemetryAtomically(
+      exerciseEntryId,
+      userId,
+      actingUserId,
+      fields,
+      zones,
+      () =>
+        storeHeartRateSeries(userId, actingUserId, exerciseEntryId, accepted)
+    );
+  } else {
+    await exerciseEntryRepository.applyWatchTelemetryAtomically(
+      exerciseEntryId,
+      userId,
+      actingUserId,
+      fields,
+      zones
+    );
+  }
 }
 
-export { importExerciseEntriesFromCsv, attachWatchTelemetryToExerciseEntry };
+/**
+ * Keeps the beat-by-beat series, tagged with the entry, so the workout's heart
+ * rate chart works without waiting for (or depending on) a later Health sync.
+ * Only the span the workout covers is replaced, and only samples tagged with
+ * this entry: another workout overlapping that span keeps its own readings.
+ * Best effort: a failure is logged and the telemetry post still succeeds. A
+ * snapshot the row lock rejected never reaches here.
+ */
+async function storeHeartRateSeries(
+  userId: string,
+  actingUserId: string,
+  exerciseEntryId: string,
+  hrSamples: HeartRateSampleRequest[]
+): Promise<void> {
+  try {
+    const tz = await loadUserTimezone(userId);
+    const valid = hrSamples.filter((s) => Number.isFinite(Date.parse(s.t)));
+    if (valid.length === 0) return;
+    const times = valid.map((s) => Date.parse(s.t));
+    await upsertSamplesByDay(
+      userId,
+      actingUserId,
+      'heart_rate',
+      'SparkyFitness Watch',
+      valid.map((s) => ({
+        entry_date: instantToDay(s.t, tz),
+        timestamp: new Date(s.t),
+        ex: exerciseEntryId,
+        bpm: Math.round(s.bpm),
+      })),
+      {
+        mode: 'merge',
+        window: {
+          startMs: times.reduce((a, b) => (b < a ? b : a)),
+          endMs: times.reduce((a, b) => (b > a ? b : a)),
+        },
+        ex: exerciseEntryId,
+      }
+    );
+  } catch (error) {
+    log(
+      'warn',
+      `Could not store the heart rate series for exercise entry ${exerciseEntryId}: ${describeError(error)}`
+    );
+  }
+}
+
+/**
+ * Attaches a GPS track recorded on the phone to an exercise entry that already
+ * exists: the route, per-lap splits, and the summary fields the track implies
+ * (speed, elevation gain and loss, moving time).
+ *
+ * Re-posting the same track is safe. Points upsert against the per-entry
+ * unique constraint, so a client retrying after a dropped response replaces
+ * those rows instead of duplicating them. Laps are deleted and inserted
+ * again in the same transaction: the lap upsert does not remove a higher
+ * index that this post no longer sends. Summary fields the entry already
+ * carries are left alone: the person's own distance and calories stay as
+ * they logged them.
+ */
+async function attachGpsTrackToExerciseEntry(
+  userId: string,
+  actingUserId: string,
+  exerciseEntryId: string,
+  track: AttachExerciseEntryGpsTrackRequest
+): Promise<void> {
+  const ownerId = await exerciseEntryRepository.getExerciseEntryOwnerId(
+    exerciseEntryId,
+    userId
+  );
+  if (!ownerId || ownerId !== userId) {
+    const error = new Error('Exercise entry not found.');
+    // @ts-expect-error TS(2339): Property 'status' does not exist on type 'Error'.
+    error.status = 404;
+    throw error;
+  }
+  const entry = await exerciseEntryRepository.getExerciseEntryById(
+    exerciseEntryId,
+    userId
+  );
+  const entryDate: string | undefined = entry?.entry_date;
+  if (!entryDate) {
+    const error = new Error('Exercise entry not found.');
+    // @ts-expect-error TS(2339): Property 'status' does not exist on type 'Error'.
+    error.status = 404;
+    throw error;
+  }
+
+  const hasInvalidTime =
+    track.points.some((p) => !Number.isFinite(Date.parse(p.t))) ||
+    (track.laps ?? []).some(
+      (l) =>
+        !Number.isFinite(Date.parse(l.start_time)) ||
+        !Number.isFinite(Date.parse(l.end_time))
+    );
+  if (hasInvalidTime) {
+    const error = new Error('GPS track has an invalid timestamp.');
+    // @ts-expect-error TS(2339): Property 'status' does not exist on type 'Error'.
+    error.status = 400;
+    throw error;
+  }
+
+  const points: TelemetryGpsPoint[] = [...track.points].sort(
+    (a, b) => Date.parse(a.t) - Date.parse(b.t)
+  );
+  if (points.length < 2) {
+    const error = new Error('GPS track needs at least two timestamped points.');
+    // @ts-expect-error TS(2339): Property 'status' does not exist on type 'Error'.
+    error.status = 400;
+    throw error;
+  }
+  const lapWindows: LapWindow[] = [...(track.laps ?? [])]
+    .sort((a, b) => Date.parse(a.start_time) - Date.parse(b.start_time))
+    .map((lap, index) => ({ ...lap, lap_index: index + 1 }));
+  const laps = deriveLaps(lapWindows, points);
+  const derived = deriveWorkoutTelemetry(points);
+
+  const client = await getClient(userId, actingUserId);
+  try {
+    await client.query('BEGIN');
+    await workoutTelemetryRepo._bulkInsertExerciseEntryGpsPointsWithClient(
+      client,
+      userId,
+      points.map((p) => ({
+        user_id: userId,
+        exercise_entry_id: exerciseEntryId,
+        entry_date: entryDate,
+        timestamp: new Date(p.t),
+        latitude: p.lat,
+        longitude: p.lon,
+        altitude_meters: p.alt ?? null,
+        speed_mps: p.speed ?? null,
+        heart_rate_bpm: p.hr ?? null,
+        cadence: p.cad ?? null,
+        power_watts: p.power ?? null,
+        distance_meters: p.dist ?? null,
+        horizontal_accuracy_meters: p.hacc ?? null,
+        vertical_accuracy_meters: p.vacc ?? null,
+        course_degrees: p.course ?? null,
+      }))
+    );
+    await client.query(
+      'DELETE FROM exercise_entry_laps WHERE exercise_entry_id = $1',
+      [exerciseEntryId]
+    );
+    await workoutTelemetryRepo._bulkInsertExerciseEntryLapsWithClient(
+      client,
+      userId,
+      laps.map((lap) => ({
+        user_id: userId,
+        exercise_entry_id: exerciseEntryId,
+        entry_date: entryDate,
+        lap_index: lap.lap_index,
+        start_time: new Date(lap.start_time),
+        end_time: new Date(lap.end_time),
+        duration_seconds: lap.duration_seconds,
+        distance_meters: lap.distance_meters,
+        calories: lap.calories,
+        avg_heart_rate: lap.avg_heart_rate,
+        max_heart_rate: lap.max_heart_rate,
+        avg_speed_mps: lap.avg_speed_mps,
+        max_speed_mps: lap.max_speed_mps,
+        avg_cadence: lap.avg_cadence,
+        avg_power_watts: lap.avg_power_watts,
+        elevation_gain_meters: lap.elevation_gain_meters,
+        elevation_loss_meters: lap.elevation_loss_meters,
+        moving_time_seconds: lap.moving_time_seconds,
+        avg_moving_speed_mps: lap.avg_moving_speed_mps,
+      }))
+    );
+    await exerciseEntryRepository._updateExerciseEntryTelemetryOnlyWithClient(
+      client,
+      exerciseEntryId,
+      userId,
+      derived
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export {
+  importExerciseEntriesFromCsv,
+  attachWatchTelemetryToExerciseEntry,
+  attachGpsTrackToExerciseEntry,
+};
 export default {
   importExerciseEntriesFromCsv,
   attachWatchTelemetryToExerciseEntry,
+  attachGpsTrackToExerciseEntry,
 };

@@ -19,6 +19,7 @@ import type {
   UpdatePresetSessionRequest,
   PresetSessionResponse,
   ExerciseEntryResponse,
+  AttachExerciseEntryGpsTrackRequest,
   Pagination,
 } from '@workspace/shared';
 
@@ -371,8 +372,11 @@ export interface CreateExerciseEntryPayload {
   exercise_id: string;
   exercise_name?: string | null;
   duration_minutes: number;
-  calories_burned: number;
+  /** Omit to let the server estimate from the exercise and duration. */
+  calories_burned?: number;
   entry_date: string;
+  /** Local start time, `HH:MM` (24h). */
+  entry_time?: string;
   distance?: number | null;
   avg_heart_rate?: number | null;
   notes?: string | null;
@@ -480,6 +484,25 @@ export const attachExerciseEntryWatchTelemetry = async (
     operation: 'attach exercise entry watch telemetry',
     method: 'POST',
     body: telemetry,
+  });
+};
+
+/**
+ * Stores a GPS track recorded on the phone (and its per-km or per-mile
+ * splits) against an exercise entry that already exists. The server derives
+ * lap stats and the speed/elevation summary from the points; sending the same
+ * track twice replaces it, so a retry is safe.
+ */
+export const attachExerciseEntryGpsTrack = async (
+  exerciseEntryId: string,
+  track: AttachExerciseEntryGpsTrackRequest
+): Promise<void> => {
+  return apiFetch<void>({
+    endpoint: `/api/exercise-entries/${exerciseEntryId}/gps-track`,
+    serviceName: 'Exercise API',
+    operation: 'attach exercise entry GPS track',
+    method: 'POST',
+    body: track,
   });
 };
 

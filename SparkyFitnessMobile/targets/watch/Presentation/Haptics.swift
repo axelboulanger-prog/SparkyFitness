@@ -21,7 +21,13 @@ enum Haptics {
         play(.success)
     }
 
-    /// Only ever called from button actions, which run on the main actor.
+    /// An interval plan moved to its next step. Two firm taps so it reads on
+    /// a moving wrist, and differs from a button press.
+    static func step() {
+        play(.notification)
+    }
+
+    /// Called from button actions and the recording store, which run on the main actor.
     private static func play(_ type: WKHapticType) {
         MainActor.assumeIsolated {
             guard CheckInStore.shared.context.effectiveHapticsEnabled else { return }

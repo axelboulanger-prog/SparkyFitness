@@ -159,6 +159,7 @@ const ICON_MAP = {
   // Biometrics/Security
   fingerprint: { sf: 'touchid', ion: 'finger-print-outline' },
   'lock-closed': { sf: 'lock.fill', ion: 'lock-closed-outline' },
+  'lock-open': { sf: 'lock.open', ion: 'lock-open-outline' },
   'share-public': {
     sf: 'square.and.arrow.up',
     ion: 'share-social-outline',
@@ -175,6 +176,7 @@ const ICON_MAP = {
   medication: { sf: 'pills', ion: 'medkit-outline' },
   calendar: { sf: 'calendar', ion: 'calendar-outline' },
   symptoms: { sf: 'cross.case', ion: 'medkit-outline' },
+  mood: { sf: 'face.smiling', ion: 'happy-outline' },
 
   // Sleep
   'sleep-wake-up': { sf: 'alarm.fill', ion: 'alarm' },

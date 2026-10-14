@@ -285,6 +285,13 @@ BEGIN
   ) VALUES (
     p_admin_user_id, 'Canadian Nutrient File', 'canadian-nutrient-file', TRUE, TRUE, now(), now()
   ) ON CONFLICT (user_id, provider_name) DO UPDATE SET is_public = TRUE;
+
+  -- NIH Dietary Supplement Label Database
+  INSERT INTO public.external_data_providers (
+    user_id, provider_name, provider_type, is_active, is_public, created_at, updated_at
+  ) VALUES (
+    p_admin_user_id, 'NIH Dietary Supplement Label Database', 'dsld', TRUE, TRUE, now(), now()
+  ) ON CONFLICT (user_id, provider_name) DO UPDATE SET is_public = TRUE;
 END;
 $$;
 
@@ -3656,6 +3663,32 @@ CREATE TABLE public.rate_limit (
 
 
 --
+-- Name: run_programs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.run_programs (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    program_id character varying(50) NOT NULL,
+    enabled boolean DEFAULT true NOT NULL,
+    next_index integer DEFAULT 0 NOT NULL,
+    workouts jsonb DEFAULT '[]'::jsonb NOT NULL,
+    adjustment_log jsonb DEFAULT '[]'::jsonb NOT NULL,
+    effort_log jsonb DEFAULT '[]'::jsonb NOT NULL,
+    completion_log jsonb DEFAULT '[]'::jsonb NOT NULL,
+    run_days smallint[] DEFAULT '{}'::smallint[] NOT NULL,
+    start_date date,
+    end_date date,
+    last_done_date date,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT chk_run_programs_end_after_start CHECK (((end_date IS NULL) OR (start_date IS NULL) OR (end_date >= start_date))),
+    CONSTRAINT run_programs_next_index_check CHECK ((next_index >= 0)),
+    CONSTRAINT run_programs_run_days_check CHECK ((run_days <@ ARRAY[(0)::smallint, (1)::smallint, (2)::smallint, (3)::smallint, (4)::smallint, (5)::smallint, (6)::smallint]))
+);
+
+
+--
 -- Name: session; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5897,6 +5930,14 @@ ALTER TABLE ONLY public.rate_limit
 
 
 --
+-- Name: run_programs run_programs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_programs
+    ADD CONSTRAINT run_programs_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: session session_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6134,6 +6175,14 @@ ALTER TABLE ONLY public.exercise_entry_laps
 
 ALTER TABLE ONLY public.health_metric_samples
     ADD CONSTRAINT uq_health_metric_samples UNIQUE (user_id, metric, entry_date, source_provider);
+
+
+--
+-- Name: run_programs uq_run_programs_user; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_programs
+    ADD CONSTRAINT uq_run_programs_user UNIQUE (user_id);
 
 
 --
@@ -6476,6 +6525,13 @@ CREATE INDEX idx_magic_link_token ON auth.users USING btree (magic_link_token);
 --
 
 CREATE UNIQUE INDEX check_in_measurements_user_date_unique ON public.check_in_measurements USING btree (user_id, entry_date);
+
+
+--
+-- Name: custom_categories_user_name_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX custom_categories_user_name_key ON public.custom_categories USING btree (user_id, name);
 
 
 --
@@ -7337,6 +7393,13 @@ CREATE INDEX openfoodfacts_sync_queue_due_idx ON public.openfoodfacts_sync_queue
 --
 
 CREATE INDEX openfoodfacts_sync_queue_user_status_idx ON public.openfoodfacts_sync_queue USING btree (user_id, status, updated_at DESC);
+
+
+--
+-- Name: sleep_entries_user_date_source_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX sleep_entries_user_date_source_key ON public.sleep_entries USING btree (user_id, entry_date, source);
 
 
 --
@@ -8840,6 +8903,14 @@ ALTER TABLE ONLY public.pregnancy_photos
 
 ALTER TABLE ONLY public.profiles
     ADD CONSTRAINT profiles_user_id_fkey FOREIGN KEY (id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
+-- Name: run_programs run_programs_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_programs
+    ADD CONSTRAINT run_programs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
 
 
 --
@@ -10492,6 +10563,13 @@ CREATE POLICY owner_policy ON public.pregnancy_photos USING ((user_id = public.a
 
 
 --
+-- Name: run_programs owner_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY owner_policy ON public.run_programs USING ((user_id = public.authenticated_user_id())) WITH CHECK ((user_id = public.authenticated_user_id()));
+
+
+--
 -- Name: sparky_chat_history owner_policy; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -10609,6 +10687,12 @@ ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.rate_limit ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: run_programs; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.run_programs ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: exercise_entries select_exercise_preset_entry_linked_policy; Type: POLICY; Schema: public; Owner: -
@@ -12325,6 +12409,13 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.profiles TO sparky_app;
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.rate_limit TO sparky_app;
+
+
+--
+-- Name: TABLE run_programs; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.run_programs TO sparky_app;
 
 
 --

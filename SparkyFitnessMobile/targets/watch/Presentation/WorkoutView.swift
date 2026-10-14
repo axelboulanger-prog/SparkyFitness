@@ -60,11 +60,24 @@ private enum SupersetPalette {
 /// way. `<` and `>` walk the whole workout's sets in order.
 struct WorkoutView: View {
     @EnvironmentObject private var store: WorkoutSessionStore
+    @EnvironmentObject private var run: WatchRunStore
 
     var body: some View {
         Group {
             if store.isActive {
                 ActiveWorkoutView()
+                    .overlay(alignment: .top) {
+                        if let exercise = store.prBannerExercise {
+                            PersonalRecordBanner(exercise: exercise)
+                                .onTapGesture { store.dismissPrBanner() }
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+                    }
+                    .animation(.easeOut(duration: 0.25), value: store.prBannerExercise)
+            } else if run.isActive {
+                // A walk or run recorded on the wrist alone, started from the
+                // Cardio row below.
+                WatchRunView()
             } else if let summary = store.lastSummary {
                 WorkoutSummaryView(summary: summary)
             } else {
@@ -74,11 +87,31 @@ struct WorkoutView: View {
     }
 }
 
+/// Banner over the active workout when a set logged on the wrist is a record.
+private struct PersonalRecordBanner: View {
+    let exercise: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Label("New PR!", systemImage: "trophy.fill")
+                .font(.caption.weight(.bold))
+            if !exercise.isEmpty {
+                Text(exercise).font(.caption2).lineLimit(1)
+            }
+        }
+        .foregroundStyle(.black)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(Capsule().fill(Color.yellow))
+    }
+}
+
 /// Shown after a workout ends, until dismissed. Scrolls: the totals do not
 /// fit a 40mm screen next to the Done button.
 private struct WorkoutSummaryView: View {
     @EnvironmentObject private var store: WorkoutSessionStore
     @EnvironmentObject private var checkIn: CheckInStore
+    @EnvironmentObject private var session: WatchSessionManager
     let summary: WorkoutSummary
 
     private var unit: WeightUnit { checkIn.context.effectiveWeightUnit }
@@ -132,12 +165,48 @@ private struct WorkoutSummaryView: View {
 private struct WaitingForWorkoutView: View {
     @EnvironmentObject private var checkIn: CheckInStore
     @EnvironmentObject private var session: WatchSessionManager
+    @EnvironmentObject private var run: WatchRunStore
+    /// Whether the Cardio choices are up.
+    @State private var choosingCardio = false
     /// The preset just tapped. Blocks a second tap from starting two
     /// sessions before the first one arrives. Cleared after a few seconds
     /// so a start the phone could not finish can be tried again.
     @State private var startingId: String?
 
     var body: some View {
+        VStack(spacing: WatchStyle.s(4)) {
+            // One row for every walk and run; the four choices are behind it
+            // so they do not crowd out the saved workouts. Hidden while
+            // something else holds the watch's single workout session.
+            if run.canStart {
+                Button {
+                    Haptics.tap()
+                    choosingCardio = true
+                } label: {
+                    Label("Cardio", systemImage: "figure.run")
+                        .font(.system(size: WatchStyle.s(16), weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, WatchStyle.s(12))
+                        .background(Color.green.opacity(0.25), in: WatchStyle.shape)
+                        .contentShape(WatchStyle.shape)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 4)
+            }
+            workoutPicker
+        }
+        .sheet(isPresented: $choosingCardio) {
+            CardioChoicesView { kind, place in
+                choosingCardio = false
+                run.start(kind, place: place)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var workoutPicker: some View {
         let all = checkIn.context.startableWorkouts ?? []
         // Today's planned workouts come first. Only ones the phone can start
         // (it lists them among the saved workouts), and not again below.
@@ -315,8 +384,16 @@ private struct IntervalCaptionView: View {
 
 private struct ActiveWorkoutView: View {
     @EnvironmentObject private var store: WorkoutSessionStore
+    @EnvironmentObject private var session: WatchSessionManager
+    @EnvironmentObject private var checkIn: CheckInStore
 
     @State private var showingExercises = false
+    @State private var page: WorkoutPageID? = .set
+    /// A logged set held back while the wearer picks an effort. Held here and
+    /// not in `CurrentSetView`: logging a set starts the rest, which swaps that
+    /// view for `RestView` and would take the screen, and the set with it,
+    /// away before anything was sent. Sent once, on save, skip or dismissal.
+    @State private var pendingRpe: PendingRpe?
 
     /// Always available, including during rest: Finish lives in the picker
     /// sheet, and hiding the chevron while resting left no way to end the
@@ -325,40 +402,167 @@ private struct ActiveWorkoutView: View {
         { showingExercises = true }
     }
 
-    var body: some View {
-        VStack(spacing: 4) {
-            MetricsStrip(onBack: openExerciseList)
-            if let format = store.plan?.workoutFormat?.lowercased(), format != "standard" {
-                IntervalCaptionView(plan: store.plan)
-            }
-
-            if store.isResting {
-                RestView()
-            } else if let step = store.currentStep {
-                CurrentSetView(step: step)
-            } else {
-                WorkoutCompleteView()
-            }
+    /// Sends the answer first so the phone has it by the time it hears the
+    /// workout ended, then ends the workout.
+    private func finish(updatingPreset update: Bool) {
+        store.askingPresetUpdate = false
+        if let sessionId = store.plan?.sessionId {
+            session.sendPresetUpdateAnswer(sessionId: sessionId, update: update)
         }
+        session.endWorkout()
+    }
+
+    var body: some View {
+        // The set screen, then (scrolling up from the bottom, as in Hevy) what
+        // can be done to the set, to the exercise, and to the workout. Each is
+        // one screen tall and the scroll snaps to it. The crown scrolls only
+        // while no value box has claimed it for adjusting a number.
+        GeometryReader { geo in
+            ScrollView {
+                VStack(spacing: 0) {
+                    setScreen
+                        .workoutPage(geo, alignment: .top)
+                        .id(WorkoutPageID.set)
+                    if let step = store.currentStep {
+                        SetOptionsPage(step: step)
+                            .workoutPage(geo)
+                            .id(WorkoutPageID.setOptions)
+                        ExerciseOptionsPage(step: step)
+                            .workoutPage(geo)
+                            .id(WorkoutPageID.exerciseOptions)
+                    }
+                    WorkoutActionsPage()
+                        .workoutPage(geo)
+                        .id(WorkoutPageID.actions)
+                }
+                .scrollTargetLayout()
+            }
+            .scrollPosition(id: $page)
+            .scrollTargetBehavior(.viewAligned)
+            .scrollIndicators(.hidden)
+            // Pages are laid out against the whole screen, so each snaps to
+            // exactly one screen; `workoutPage` puts the content back inside
+            // the area the clock and page dots leave free.
+            .ignoresSafeArea(edges: .vertical)
+        }
+        // A set logged here or on the phone, an edit, or a jump from the
+        // list moves the cursor: back to the set screen.
+        .onChange(of: store.currentStep?.plannedSet.setId) { page = .set }
         .padding(.horizontal, 4)
         .sheet(isPresented: $showingExercises) {
             ExerciseListView { exerciseEntryId in
                 store.jumpToExercise(exerciseEntryId)
             }
         }
+        // Over the whole page rather than a sheet: a sheet brings the system's
+        // close button, which sat on top of the exercise name and left no room
+        // on a 40 mm screen. Skip closes it, and a set waits here until then.
+        .overlay {
+            if let pending = pendingRpe {
+                RpePickerView(
+                    title: pending.step.exerciseName,
+                    summary: pending.summary(unit: checkIn.context.effectiveWeightUnit),
+                    hapticsEnabled: checkIn.context.effectiveHapticsEnabled
+                ) { rpe in
+                    store.markPendingReadyToSend(rpe: rpe)
+                    let held = store.pendingSetCompletion
+                    let sent = session.sendSetCompleted(
+                        pending.step,
+                        values: pending.values,
+                        rpe: rpe,
+                        completedAt: pending.completedAt,
+                        durationSeconds: held?.durationSeconds,
+                        useCapturedDuration: held != nil,
+                        requireDurable: true
+                    )
+                    if sent {
+                        store.clearPendingSetCompletion()
+                        pendingRpe = nil
+                    }
+                }
+                .background(Color.black.ignoresSafeArea())
+            }
+        }
+        // Asked when Finish is tapped on a workout that changed from the saved
+        // one it started from, as Hevy does. Only buttons close it.
+        .alert(
+            "Update Workout?",
+            isPresented: Binding(
+                get: { store.askingPresetUpdate },
+                set: { _ in }
+            )
+        ) {
+            Button("Update") { finish(updatingPreset: true) }
+            Button("Keep Original", role: .cancel) { finish(updatingPreset: false) }
+        } message: {
+            Text("Save the changes you made to \"\(store.plan?.workoutName ?? "")\"?")
+        }
         .onAppear {
+            if pendingRpe == nil, let pending = store.pendingSetCompletion,
+               let step = store.steps.first(where: { $0.plannedSet.setId == pending.setId }) {
+                pendingRpe = PendingRpe(
+                    step: step,
+                    values: pending.values,
+                    completedAt: pending.completedAt
+                )
+            }
+            session.retryPendingSetCompletion()
+            if store.pendingSetCompletion == nil { pendingRpe = nil }
             #if DEBUG
             if ScreenshotSeed.opensExerciseList {
                 showingExercises = true
             }
+            switch ScreenshotSeed.workoutPage {
+            case "setoptions": page = .setOptions
+            case "exerciseoptions": page = .exerciseOptions
+            case "actions": page = .actions
+            default: break
+            }
+            if ScreenshotSeed.opensRpe, let step = store.currentStep {
+                pendingRpe = PendingRpe(
+                    step: step,
+                    values: store.values(for: step),
+                    completedAt: Date()
+                )
+            }
+            if ScreenshotSeed.opensPresetUpdate {
+                store.askingPresetUpdate = true
+            }
             #endif
         }
+        .onChange(of: store.pendingSetCompletion) {
+            if store.pendingSetCompletion == nil { pendingRpe = nil }
+        }
     }
+
+    private var setScreen: some View {
+        VStack(spacing: 4) {
+            MetricsStrip(onBack: openExerciseList)
+            if let format = store.plan?.workoutFormat?.lowercased(), format != "standard" {
+                IntervalCaptionView(plan: store.plan)
+            }
+
+            Group {
+                if store.isResting {
+                    RestView()
+                } else if let step = store.currentStep {
+                    CurrentSetView(step: step) { pendingRpe = $0 }
+                } else {
+                    WorkoutCompleteView()
+                }
+            }
+        }
+    }
+}
+
+private enum WorkoutPageID: Hashable {
+    case set, setOptions, exerciseOptions, actions
 }
 
 /// Shown after the last set is logged. Finish used to live only in the
 /// exercise-picker sheet, which was easy to miss.
 private struct WorkoutCompleteView: View {
+    @EnvironmentObject private var store: WorkoutSessionStore
     @EnvironmentObject private var session: WatchSessionManager
 
     var body: some View {
@@ -368,7 +572,7 @@ private struct WorkoutCompleteView: View {
                 .font(.headline)
             Button("Finish") {
                 Haptics.tap()
-                session.endWorkout()
+                if !store.askPresetUpdateBeforeFinish() { session.endWorkout() }
             }
             .font(.caption)
             .tint(.green)
@@ -396,11 +600,11 @@ private struct ExerciseListView: View {
     let onSelect: (String) -> Void
 
     @EnvironmentObject private var store: WorkoutSessionStore
-    @EnvironmentObject private var session: WatchSessionManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var confirmingFinish = false
     @State private var confirmingDiscard = false
+    @State private var addingExercise = false
 
     private var exercises: [PlannedExercise] { store.plan?.exercises ?? [] }
 
@@ -471,6 +675,17 @@ private struct ExerciseListView: View {
                     }
                 }
 
+                Section {
+                    Button {
+                        Haptics.tap()
+                        addingExercise = true
+                    } label: {
+                        Label("Add Exercise", systemImage: "plus")
+                            .font(.caption)
+                    }
+                    .listRowBackground(WatchStyle.shape.fill(WatchStyle.fill))
+                }
+
                 // Finishing lives here rather than on the set screen: this is
                 // the workout's overview, and an end-everything button one tap
                 // from the tick that logs a set is a mis-tap waiting to happen.
@@ -496,36 +711,12 @@ private struct ExerciseListView: View {
             .navigationTitle(store.plan?.workoutName ?? "Workout")
             .navigationBarTitleDisplayMode(.inline)
         }
-        .confirmationDialog(
-            "Finish workout?",
-            isPresented: $confirmingFinish,
-            titleVisibility: .visible
-        ) {
-            Button("Finish", role: .destructive) {
-                Haptics.tap()
-                // Dismissed first so the sheet is not re-rendering against a
-                // plan that `endWorkout` has already cleared.
-                dismiss()
-                session.endWorkout()
-            }
-            Button("Cancel", role: .cancel) { Haptics.tap() }
-        } message: {
-            Text("Heart rate for this session is sent to your phone.")
-        }
-        .confirmationDialog(
-            "Discard workout?",
-            isPresented: $confirmingDiscard,
-            titleVisibility: .visible
-        ) {
-            Button("Discard", role: .destructive) {
-                Haptics.tap()
-                dismiss()
-                session.discardWorkout()
-            }
-            Button("Cancel", role: .cancel) { Haptics.tap() }
-        } message: {
-            Text("This workout won't be saved.")
-        }
+        .sheet(isPresented: $addingExercise) { AddExerciseSheet() }
+        .endWorkoutDialogs(
+            confirmingFinish: $confirmingFinish,
+            confirmingDiscard: $confirmingDiscard,
+            beforeEnding: { dismiss() }
+        )
     }
 }
 
@@ -708,6 +899,9 @@ private struct MetricsStrip: View {
 
 private struct CurrentSetView: View {
     let step: WorkoutStep
+    /// Hands a logged set up to the workout page to hold until an effort is
+    /// picked (only called while the phone's effort setting is on).
+    let onAwaitRpe: (PendingRpe) -> Void
 
     @EnvironmentObject private var store: WorkoutSessionStore
     @EnvironmentObject private var session: WatchSessionManager
@@ -828,10 +1022,26 @@ private struct CurrentSetView: View {
             StepControls(isCompleted: store.isCompleted(step)) {
                 endCrownEditing()
                 store.goToPreviousStep()
+            } onUncomplete: {
+                endCrownEditing()
+                if store.uncompleteStep(step) {
+                    session.sendSetUncompleted(step)
+                }
             } onComplete: {
                 // The value on screen is what gets logged, settled or not.
                 endCrownEditing()
-                if let completed = store.completeCurrentSet() {
+                if checkIn.context.effectiveRpeEnabled {
+                    if let completed = store.completeCurrentSet(holdForEffort: true),
+                       let pending = store.pendingSetCompletion {
+                        onAwaitRpe(
+                            PendingRpe(
+                                step: completed,
+                                values: pending.values,
+                                completedAt: pending.completedAt
+                            )
+                        )
+                    }
+                } else if let completed = store.completeCurrentSet() {
                     session.sendSetCompleted(completed, values: store.values(for: completed))
                 }
             } onNext: {
@@ -1293,6 +1503,7 @@ private struct ValueBox: View {
 private struct StepControls: View {
     let isCompleted: Bool
     let onPrevious: () -> Void
+    let onUncomplete: () -> Void
     let onComplete: () -> Void
     let onNext: () -> Void
 
@@ -1316,28 +1527,32 @@ private struct StepControls: View {
             SquircleButton(systemImage: "chevron.right", action: onNext)
                 .disabled(store.currentStepIndex >= store.steps.count - 1)
             // The main action, white like the rest of the controls are not.
-            // Once the set is logged it turns into a green tick so a second
-            // tap reads as already done rather than inviting a double entry.
+            // Once the set is logged it turns into an undo, a different glyph
+            // so a second tap does not read as logging it again.
             Button {
-                Haptics.setLogged()
-                onComplete()
+                if isCompleted {
+                    Haptics.tap()
+                    onUncomplete()
+                } else {
+                    Haptics.setLogged()
+                    onComplete()
+                }
             } label: {
-                Image(systemName: isCompleted ? "checkmark.circle.fill" : "checkmark")
+                Image(systemName: isCompleted ? "arrow.uturn.backward" : "checkmark")
                     .font(.system(size: WatchStyle.s(20), weight: .semibold))
                     // Spelled `Color.x` rather than `.x`: the parameter is an
                     // opaque `some ShapeStyle`, which gives a ternary's two
                     // branches nothing to infer a shared type from.
-                    .foregroundStyle(isCompleted ? Color.green : Color.black)
+                    .foregroundStyle(isCompleted ? Color.orange : Color.black)
                     .frame(maxWidth: .infinity)
                     .frame(height: WatchStyle.s(44))
                     .background(
-                        isCompleted ? Color.green.opacity(0.2) : Color.white,
+                        isCompleted ? Color.orange.opacity(0.2) : Color.white,
                         in: WatchStyle.shape
                     )
                     .contentShape(WatchStyle.shape)
             }
             .buttonStyle(.plain)
-            .disabled(isCompleted)
             // Double-tap logs the set, but only while this page is showing and
             // there is a set left to log. A running stopwatch owns the gesture
             // (it stops the timer first) so a hold is not logged mid-count.
@@ -1602,6 +1817,177 @@ private struct NumericKeypadView: View {
     }
 }
 
+/// A set that has been logged on the watch and is waiting for an effort pick.
+private struct PendingRpe: Identifiable {
+    let id = UUID()
+    let step: WorkoutStep
+    let values: SetValues
+    /// When the set was ticked, not when its effort was saved: the phone starts
+    /// its rest from this, so the two timers end together.
+    let completedAt: Date
+
+    /// "Set 1/3: 65.0lbs × 12", with whichever of weight and reps the set has.
+    func summary(unit: WeightUnit) -> String {
+        var parts: [String] = []
+        if let kg = values.weightKg, kg > 0 {
+            parts.append(String(format: "%.1f%@", unit.fromKg(kg), unit.suffix))
+        }
+        if let reps = values.reps {
+            parts.append(String(format: "%.0f", reps))
+        }
+        let label = step.label
+        return parts.isEmpty ? label : "\(label): " + parts.joined(separator: " × ")
+    }
+}
+
+/// Effort picked after a set: the set it is for, one big value card the Digital
+/// Crown changes through the scale, what that value means in reps left, and
+/// Skip / Save. Same flat dark squircles as the set screens. `onDone(nil)` skips.
+private struct RpePickerView: View {
+    let title: String
+    let summary: String
+    let hapticsEnabled: Bool
+    let onDone: (Double?) -> Void
+
+    /// Whole numbers from 1 through 6, then half steps through 10.
+    private static let values: [Double] = [
+        1, 2, 3, 4, 5, 6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10,
+    ]
+
+    private static let fill = Color(white: 0.14)
+    private static let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+
+    /// Crown position in `values`, as a Double because that is what the crown
+    /// binds to. Starts on 8, the middle of what most working sets are.
+    @State private var position: Double = Double(
+        RpePickerView.values.firstIndex(of: 8) ?? 0
+    )
+    @FocusState private var focused: Bool
+
+    private var index: Int {
+        min(max(Int(position.rounded()), 0), Self.values.count - 1)
+    }
+
+    private var value: Double { Self.values[index] }
+
+    private var valueText: String {
+        value.truncatingRemainder(dividingBy: 1) == 0
+            ? String(format: "%.0f", value)
+            : String(format: "%.1f", value)
+    }
+
+    /// How much was left, in Hevy's words.
+    private var meaning: String {
+        switch value {
+        case 10:
+            return String(localized: "watch.rpe.meaning.10", defaultValue: "No more reps possible")
+        case 9.5:
+            return String(localized: "watch.rpe.meaning.9_5", defaultValue: "Could've maybe done 1 more rep")
+        case 9:
+            return String(localized: "watch.rpe.meaning.9", defaultValue: "Could've done 1 more rep")
+        case 8.5:
+            return String(localized: "watch.rpe.meaning.8_5", defaultValue: "Could've maybe done 2 more reps")
+        case 8:
+            return String(localized: "watch.rpe.meaning.8", defaultValue: "Could've done 2 more reps")
+        case 7.5:
+            return String(localized: "watch.rpe.meaning.7_5", defaultValue: "Could've maybe done 3 more reps")
+        case 7:
+            return String(localized: "watch.rpe.meaning.7", defaultValue: "Could've done 3 more reps")
+        case 6.5:
+            return String(localized: "watch.rpe.meaning.6_5", defaultValue: "Could've maybe done 4 more reps")
+        case 6:
+            return String(localized: "watch.rpe.meaning.6", defaultValue: "Could've done 4+ more reps")
+        case 5:
+            return String(localized: "watch.rpe.meaning.5", defaultValue: "Could've done 5+ more reps")
+        case 4:
+            return String(localized: "watch.rpe.meaning.4", defaultValue: "Light effort")
+        case 3:
+            return String(localized: "watch.rpe.meaning.3", defaultValue: "Very light effort")
+        default:
+            return String(localized: "watch.rpe.meaning.low", defaultValue: "Little to no effort")
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 3) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title)
+                    .font(.system(size: 14, weight: .bold))
+                    .lineLimit(1)
+                Text(summary)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .minimumScaleFactor(0.8)
+            // Room for the system clock, which sits over the top right.
+            .padding(.trailing, 52)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            // The card the crown is adjusting, so it wears the white border the
+            // set screen's selected value card does.
+            VStack(spacing: 0) {
+                Text(valueText)
+                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                Text(String(localized: "watch.rpe.label", defaultValue: "RPE"))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+            .background(Self.fill, in: Self.shape)
+            .overlay(Self.shape.stroke(Color.white, lineWidth: 2))
+
+            Text(meaning)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity, minHeight: 26)
+
+            HStack(spacing: 4) {
+                Button { onDone(nil) } label: {
+                    Text(String(localized: "watch.rpe.skip", defaultValue: "Skip"))
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.6))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 38)
+                        .background(Self.fill, in: Self.shape)
+                        .contentShape(Self.shape)
+                }
+                .buttonStyle(.plain)
+                Button { onDone(value) } label: {
+                    Text(String(localized: "watch.rpe.save", defaultValue: "Save"))
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(Color.black)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 38)
+                        .background(Color.white, in: Self.shape)
+                        .contentShape(Self.shape)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.bottom, 4)
+        .focusable()
+        .focused($focused)
+        .digitalCrownRotation(
+            $position,
+            from: 0,
+            through: Double(Self.values.count - 1),
+            by: 1,
+            sensitivity: .low,
+            isContinuous: false,
+            isHapticFeedbackEnabled: hapticsEnabled
+        )
+        .onAppear { focused = true }
+    }
+}
+
 #if DEBUG
 /// A store already mid-workout, for the canvases below. `completedSets` marks
 /// that many sets done — one is enough to put the view into its rest state,
@@ -1659,3 +2045,47 @@ private func previewStore(
         .environmentObject(WatchSessionManager.shared)
 }
 #endif
+
+
+private extension View {
+    /// One full screen tall, with the content kept inside the safe area, so
+    /// it sits where a plain page would.
+    func workoutPage(_ geo: GeometryProxy, alignment: Alignment = .center) -> some View {
+        self
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
+            .padding(.top, geo.safeAreaInsets.top)
+            .padding(.bottom, geo.safeAreaInsets.bottom)
+            .frame(
+                height: geo.size.height + geo.safeAreaInsets.top + geo.safeAreaInsets.bottom
+            )
+    }
+}
+
+/// The walks and runs the watch can record on its own, under Outdoor and
+/// Indoor. Outdoors uses the watch's GPS and records a route; indoors there is
+/// no route and the distance is the watch's own estimate.
+private struct CardioChoicesView: View {
+    let onChoose: (WatchRunKind, WatchRunPlace) -> Void
+
+    var body: some View {
+        List {
+            Section("Outdoor") {
+                row(.run, .outdoor)
+                row(.walk, .outdoor)
+            }
+            Section("Indoor") {
+                row(.run, .indoor)
+                row(.walk, .indoor)
+            }
+        }
+    }
+
+    private func row(_ kind: WatchRunKind, _ place: WatchRunPlace) -> some View {
+        Button {
+            Haptics.tap()
+            onChoose(kind, place)
+        } label: {
+            Label(kind == .run ? "Run" : "Walk", systemImage: kind.symbol)
+        }
+    }
+}

@@ -827,3 +827,17 @@ jest.mock('expo-crypto', () => {
     },
   };
 });
+
+jest.mock('expo-image-manipulator', () => ({
+  manipulateAsync: jest.fn(async (uri, _actions = [], options = {}) => ({
+    uri: uri + '-manipulated.jpg',
+    width: 1600,
+    height: 1200,
+    base64: options.base64 ? 'AAAA-manipulated-base64' : undefined,
+  })),
+  SaveFormat: {
+    JPEG: 'jpeg',
+    PNG: 'png',
+    WEBP: 'webp',
+  },
+}));

@@ -24,6 +24,10 @@ export interface UserPreferences {
   date_format?: 'MM/DD/YYYY' | 'DD/MM/YYYY' | 'YYYY-MM-DD' | string;
   energy_unit?: 'kcal' | 'kJ';
   water_display_unit?: 'ml' | 'oz' | 'liter';
+  /** Raises the daily water goal by estimated sweat loss from logged exercise. */
+  add_exercise_water_to_goal?: boolean;
+  /** Folds a logged food's water content into the daily water total. */
+  add_food_water_to_intake?: boolean;
 
   include_bmr_in_net_calories?: boolean;
   /** When on, override the formula BMR with the synced Apple Health Resting Energy /

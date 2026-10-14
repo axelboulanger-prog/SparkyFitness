@@ -46,6 +46,7 @@ Certain tables contain private user data that is **never** accessible to any fam
 * Personal AI Assistant Chat History (`sparky_chat_history` table)
 * Personal Fasting Preferences and auto-calculation configuration (`user_fasting_preferences` table)
 * Cycle & Pregnancy hub data (`cycle_settings`, `cycle_daily_entries`, `cycles`, `user_cycle_display_preferences`, `cycle_test_entries`, `pregnancies`, `pregnancy_kick_sessions`, `pregnancy_contractions`, `pregnancy_photos`, `pregnancy_checklist_state`, `health_appointments` tables) — this reproductive-health data is **never** shared or delegated, even with `can_view_reports`. It is strictly owner-only. Bump photo *files* are owner-only too: they are excluded from the public uploads URLs and can only be fetched through an authenticated request by their owner.
+* Run program (`run_programs` table): your Beginner 5K program, your place in it, the days it shows in your Diary, its first day and your goal date, and any changes the AI assistant or you made to its workouts. A training plan is personal, so it is never shared or delegated.
 
 ### 2. Tier 2: Read-Only Profile & Settings Data
 The following data can be **read** by delegates who hold at least one of `can_manage_diary`, `can_manage_checkin`, `can_manage_medications`, `can_manage_symptoms`, or `can_view_reports` — but **only the account owner can modify it**:

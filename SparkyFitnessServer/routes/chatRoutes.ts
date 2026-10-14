@@ -822,6 +822,7 @@ const FOOD_OPTIONS_ERROR_HTTP_STATUS: Record<FoodOptionsErrorCategory, number> =
     private_network_forbidden: 403,
     unsupported_provider: 422,
     unsupported_media: 422, // unreachable (no images sent); required for exhaustiveness
+    image_too_large: 422, // unreachable (no images sent); required for exhaustiveness
     refused: 422,
     truncated: 422,
     no_content: 422,

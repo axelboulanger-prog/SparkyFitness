@@ -5,6 +5,7 @@ import type {
   HealthTrendDateRange,
   HealthTrendSeries,
   HydrationDataPoint,
+  Vo2MaxDataPoint,
 } from '../types/healthTrends';
 import type { SleepTimelineDay, SleepTimelineSummary } from '../types/sleep';
 import {
@@ -15,6 +16,7 @@ import {
 import { useCaloriesRange } from './useCaloriesRange';
 import { useHydrationRange } from './useHydrationRange';
 import { useSleepRange } from './useSleepRange';
+import { useVo2MaxRange } from './useVo2MaxRange';
 
 interface UseHealthTrendsOptions {
   range: HealthTrendDateRange;
@@ -48,6 +50,7 @@ interface HealthTrends {
   sleep: SleepTrendSeries;
   hydration: HydrationTrendSeries;
   calories: CaloriesTrendSeries;
+  vo2max: HealthTrendSeries<Vo2MaxDataPoint>;
   refetch: () => Promise<void>;
 }
 
@@ -65,6 +68,7 @@ export function useHealthTrends({
   const isSleepEnabled = enabled && activeTrends.includes('sleep');
   const isHydrationEnabled = enabled && activeTrends.includes('hydration');
   const isCaloriesEnabled = enabled && activeTrends.includes('calories');
+  const isVo2MaxEnabled = enabled && activeTrends.includes('vo2max');
 
   const {
     stepsData,
@@ -98,22 +102,32 @@ export function useHealthTrends({
     refetch: refetchCalories,
   } = useCaloriesRange({ range, enabled: isCaloriesEnabled });
 
+  const {
+    vo2MaxData,
+    isLoading: isVo2MaxLoading,
+    isError: isVo2MaxError,
+    refetch: refetchVo2Max,
+  } = useVo2MaxRange({ range, enabled: isVo2MaxEnabled });
+
   const refetch = useCallback(async () => {
     await Promise.all([
       isMeasurementsEnabled ? refetchMeasurements() : Promise.resolve(),
       isSleepEnabled ? refetchSleep() : Promise.resolve(),
       isHydrationEnabled ? refetchHydration() : Promise.resolve(),
       isCaloriesEnabled ? refetchCalories() : Promise.resolve(),
+      isVo2MaxEnabled ? refetchVo2Max() : Promise.resolve(),
     ]);
   }, [
     isMeasurementsEnabled,
     isSleepEnabled,
     isHydrationEnabled,
     isCaloriesEnabled,
+    isVo2MaxEnabled,
     refetchMeasurements,
     refetchSleep,
     refetchHydration,
     refetchCalories,
+    refetchVo2Max,
   ]);
 
   return {
@@ -148,6 +162,11 @@ export function useHealthTrends({
       calorieGoals,
       isLoading: isCaloriesLoading,
       isError: isCaloriesError,
+    },
+    vo2max: {
+      data: vo2MaxData,
+      isLoading: isVo2MaxLoading,
+      isError: isVo2MaxError,
     },
     refetch,
   };

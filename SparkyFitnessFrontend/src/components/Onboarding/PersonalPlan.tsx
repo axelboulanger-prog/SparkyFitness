@@ -8,7 +8,7 @@ import {
   MineralCalculationAlgorithm,
   VitaminCalculationAlgorithm,
   SugarCalculationAlgorithm,
-} from '@/types/nutrientAlgorithms';
+} from '@workspace/shared';
 import { Save, PlayCircle } from 'lucide-react';
 import { useSaveGoalsMutation } from '@/hooks/Goals/useGoals';
 import { calculateBasePlan } from '@/utils/nutritionCalculations';

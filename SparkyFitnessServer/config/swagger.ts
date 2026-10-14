@@ -588,6 +588,11 @@ const options = {
               format: 'uuid',
               description: 'The ID of the exercise performed.',
             },
+            exercise_name: {
+              type: 'string',
+              description:
+                'Name stored on this entry. Optional on create; when omitted the library exercise name is used.',
+            },
             duration_minutes: {
               type: 'number',
               description: 'The duration of the exercise in minutes.',

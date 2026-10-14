@@ -27,6 +27,11 @@ import { useActiveWorkoutStore } from '../stores/activeWorkoutStore';
 import { flushActiveWorkoutBeforeClear } from '../hooks/useActiveWorkoutAutosave';
 import { usePreferences } from '../hooks/usePreferences';
 import { useRestCountdown } from '../hooks/useRestCountdown';
+import { useRecordingBarContent } from '../hooks/useRecordingBarContent';
+import {
+  useGpsRecording,
+  useHasGpsRecording,
+} from '../services/gpsRecordingService';
 import {
   describeActiveSetAssumed,
   formatRestCountdown,
@@ -140,8 +145,9 @@ export const ACTIVE_WORKOUT_BAR_HEIGHT =
 export function useActiveWorkoutBarPadding(
   context: 'tabs' | 'stack' = 'tabs'
 ): number {
-  const active = useActiveWorkoutStore((s) => s.sessionId !== null);
-  if (!active) return 0;
+  const workoutActive = useActiveWorkoutStore((s) => s.sessionId !== null);
+  const recordingActive = useHasGpsRecording();
+  if (!workoutActive && !recordingActive) return 0;
   return context === 'tabs'
     ? ACTIVE_WORKOUT_BAR_HEIGHT
     : BAR_CONTENT_HEIGHT + LIQUID_GLASS_VERTICAL_GAP;
@@ -168,6 +174,7 @@ const HIDDEN_ROUTES = new Set<string>([
   'ExerciseSearch',
   'WorkoutAdd',
   'ActivityAdd',
+  'RecordActivity',
   'MealPlans',
   'MealPlanForm',
   'MealAdd',
@@ -344,7 +351,11 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
   const plannedSetValues = useActiveWorkoutStore((s) => s.plannedSetValues);
   const exerciseConfigs = useActiveWorkoutStore((s) => s.exerciseConfigs);
   const workoutFormat = useActiveWorkoutStore((s) => s.workoutFormat);
-  const { state: restState, remainingMs, progress } = useRestCountdown();
+  const {
+    state: restState,
+    remainingMs,
+    progress: restProgress,
+  } = useRestCountdown();
   const queryClient = useQueryClient();
   const { preferences } = usePreferences();
   const weightUnit = normalizeWeightUnit(preferences?.default_weight_unit);
@@ -473,6 +484,22 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
       '--color-progress-track',
     ]) as [string, string, string, string];
 
+  // A GPS recording takes the bar when no strength workout does, so leaving
+  // the Record Activity screen keeps it one tap away above the dock.
+  const recording = useGpsRecording();
+  const recordingContent = useRecordingBarContent({
+    session: sessionId == null ? recording.session : null,
+    points: recording.points,
+    distanceUnit:
+      preferences?.default_distance_unit === 'miles' ? 'miles' : 'km',
+    accentColor: accentPrimary,
+    mutedColor: textMuted,
+    onOpen: () => {
+      if (!navigationRef.isReady()) return;
+      navigationRef.navigate('RecordActivity');
+    },
+  });
+
   const isWorkoutComplete = sessionId != null && activeSetId == null;
 
   // Active-set details (exercise name, set number, weight × reps) looked up
@@ -545,7 +572,7 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
 
   // The bar is a persistent workout HUD — visible for the entire active
   // workout, not just while a rest timer is running.
-  if (sessionId == null) return null;
+  if (sessionId == null && recordingContent == null) return null;
   if (navInfo.suppressed && !(usesNativeTabs && isClosingToTabs)) return null;
   if (variant === 'floating' && navInfo.isOnTabs && !usesNativeTabs)
     return null;
@@ -696,13 +723,13 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
   // states collapse to two rows — "Next Up: ..." or "Workout complete" on
   // top, load (or empty) underneath.
   const isResting = restState === 'resting' || restState === 'paused';
-  const topStatusLine =
+  const workoutTopStatusLine =
     restState === 'resting'
       ? t('activeWorkout.bar.resting', { defaultValue: 'Resting' })
       : restState === 'paused'
         ? t('activeWorkout.bar.paused', { defaultValue: 'Paused' })
         : null;
-  const primaryLine = (() => {
+  const workoutPrimaryLine = (() => {
     if (isWorkoutComplete)
       return t('activeWorkout.bar.workoutComplete', {
         defaultValue: 'Workout complete',
@@ -721,18 +748,18 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
       set: activeSetLabel.setNumber,
     });
   })();
-  const secondaryLine = isWorkoutComplete
+  const workoutSecondaryLine = isWorkoutComplete
     ? ''
     : (activeSetLabel?.loadText ?? '');
   // Right-aligned countdown — only rendered while a rest timer is running.
-  const countdownLabel =
+  const workoutCountdownLabel =
     restState === 'resting' ? formatRestCountdown(remainingMs) : null;
 
   // Left button:
   //  - resting → Pause (pauses the rest timer)
   //  - ready / paused → X (clear workout)
   //  - complete → hidden (checkmark on the right handles dismiss)
-  const leftButton =
+  const workoutLeftButton =
     restState === 'resting' ? (
       <Pressable
         onPress={handlePausePlay}
@@ -764,7 +791,7 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
   //  - resting → Check (skip rest / mark next ready)
   //  - paused → Play (resume the rest timer)
   //  - complete → checkmark to finish and dismiss the bar
-  const rightButton = (() => {
+  const workoutRightButton = (() => {
     if (isWorkoutComplete) {
       return (
         <Pressable
@@ -837,6 +864,21 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
     );
   })();
 
+  // A recording, when there is one, replaces the workout's text and controls;
+  // the surface, position and animation around them are shared.
+  const topStatusLine = recordingContent?.topStatusLine ?? workoutTopStatusLine;
+  const primaryLine = recordingContent?.primaryLine ?? workoutPrimaryLine;
+  const secondaryLine = recordingContent?.secondaryLine ?? workoutSecondaryLine;
+  const countdownLabel =
+    recordingContent?.countdownLabel ?? workoutCountdownLabel;
+  const leftButton = recordingContent?.leftButton ?? workoutLeftButton;
+  const rightButton = recordingContent?.rightButton ?? workoutRightButton;
+  const progress = recordingContent ? 0 : restProgress;
+  const openLabel =
+    recordingContent?.openLabel ??
+    t('activeWorkout.bar.open', { defaultValue: 'Open active workout' });
+  const onCenterPress = recordingContent?.onCenterPress ?? handleCenterTap;
+
   // Embedded mode adds bottom padding so the floating Add button (which rises
   // ~20pt above the tab bar top edge) overlaps an empty strip at the bottom
   // of the bar instead of covering content. Floating mode is on stack screens
@@ -858,14 +900,12 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
           progress={progress}
           leftButton={leftButton}
           rightButton={rightButton}
-          onCenterPress={handleCenterTap}
+          onCenterPress={onCenterPress}
           topStatusLine={topStatusLine}
           primaryLine={primaryLine}
           secondaryLine={secondaryLine}
           countdownLabel={countdownLabel}
-          openLabel={t('activeWorkout.bar.open', {
-            defaultValue: 'Open active workout',
-          })}
+          openLabel={openLabel}
         />
       </View>
     );
@@ -886,14 +926,12 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
             progress={progress}
             leftButton={leftButton}
             rightButton={rightButton}
-            onCenterPress={handleCenterTap}
+            onCenterPress={onCenterPress}
             topStatusLine={topStatusLine}
             primaryLine={primaryLine}
             secondaryLine={secondaryLine}
             countdownLabel={countdownLabel}
-            openLabel={t('activeWorkout.bar.open', {
-              defaultValue: 'Open active workout',
-            })}
+            openLabel={openLabel}
           />
         </View>
       </View>
@@ -921,7 +959,7 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
         <View className="w-10 items-center">{leftButton}</View>
 
         <Pressable
-          onPress={handleCenterTap}
+          onPress={onCenterPress}
           className="px-1"
           style={{
             alignItems: 'center',
@@ -930,9 +968,7 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
             justifyContent: 'center',
           }}
           accessibilityRole="button"
-          accessibilityLabel={t('activeWorkout.bar.open', {
-            defaultValue: 'Open active workout',
-          })}
+          accessibilityLabel={openLabel}
         >
           {topStatusLine != null && (
             <Text

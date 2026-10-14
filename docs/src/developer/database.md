@@ -153,6 +153,7 @@ Quick reference of all tables by domain and purpose. For detailed security tier,
 | `cycle_daily_entries` | Per-day cycle logs (flow, BBT, mood, etc.) |
 | `cycle_test_entries` | Ovulation and pregnancy test logs |
 | `pregnancies` | Pregnancy records (due date, status) |
+| `run_programs` | A person's run program, their place in it, its Diary schedule, goal date, adjustments to it and which diary entries its workouts were done as |
 | `pregnancy_kick_sessions` | Fetal kick-counter sessions |
 | `pregnancy_contractions` | Contraction timer logs |
 | `pregnancy_photos` | Bump photo journal |

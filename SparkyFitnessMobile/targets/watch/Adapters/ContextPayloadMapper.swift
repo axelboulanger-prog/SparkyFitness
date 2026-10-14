@@ -72,11 +72,45 @@ enum ContextPayloadMapper {
             setInputStyle: payload["setInputStyle"] as? String ?? previous.setInputStyle,
             startableWorkouts: startableWorkouts(from: payload) ?? previous.startableWorkouts,
             scheduledWorkouts: scheduledWorkouts(from: payload) ?? previous.scheduledWorkouts,
+            suggestedExercises: suggestedExercises(from: payload) ?? previous.suggestedExercises,
             workoutServerId: payload.keys.contains("workoutServerId")
                 ? payload["workoutServerId"] as? String
                 : previous.workoutServerId,
             distanceUnit: payload["distanceUnit"] as? String ?? previous.distanceUnit,
-            doubleTapEnabled: payload["doubleTapEnabled"] as? Bool ?? previous.doubleTapEnabled
+            doubleTapEnabled: payload["doubleTapEnabled"] as? Bool ?? previous.doubleTapEnabled,
+            rpeEnabled: payload["rpeEnabled"] as? Bool ?? previous.rpeEnabled,
+            medications: medications(from: payload),
+            fast: fastKnown(in: payload) ? fast(from: payload["fast"]) : previous.fast,
+            fastSynced: fastKnown(in: payload) ? true : previous.fastSynced,
+            steps: steps(from: payload["steps"]),
+            stepGoal: (payload["stepGoal"] as? NSNumber)?.intValue ?? previous.stepGoal,
+            runVoiceCues: payload["runVoiceCues"] as? Bool ?? previous.runVoiceCues
+        )
+    }
+
+    /// Whether the phone has answered about fasting. A null `fast` (not
+    /// fasting) is dropped on the way over, so `fastKnown` carries the answer.
+    private static func fastKnown(in payload: [String: Any]) -> Bool {
+        payload["fastKnown"] as? Bool == true || payload.keys.contains("fast")
+    }
+
+    /// Today's steps from the phone's `steps` key. Nil when absent or malformed.
+    static func steps(from raw: Any?) -> StepsSnapshot? {
+        guard let dict = raw as? [String: Any],
+              let day = dict["day"] as? String,
+              let count = (dict["count"] as? NSNumber)?.intValue else { return nil }
+        return StepsSnapshot(day: day, count: count)
+    }
+
+    /// The running fast from the phone's `fast` key. Nil when there is none.
+    static func fast(from raw: Any?) -> WatchFast? {
+        guard let dict = raw as? [String: Any],
+              let start = (dict["startedAt"] as? NSNumber)?.doubleValue else { return nil }
+        let target = (dict["targetEndAt"] as? NSNumber)?.doubleValue
+        return WatchFast(
+            startedAt: Date(timeIntervalSince1970: start / 1000),
+            targetEndAt: target.map { Date(timeIntervalSince1970: $0 / 1000) },
+            label: dict["label"] as? String
         )
     }
 
@@ -91,6 +125,19 @@ enum ContextPayloadMapper {
                 let name = row["name"] as? String, !name.isEmpty
             else { return nil }
             return StartableWorkout(presetId: presetId, name: name)
+        }
+    }
+
+    /// Same rule as `startableWorkouts`: nil when the key is absent.
+    static func suggestedExercises(from payload: [String: Any]) -> [SuggestedExercise]? {
+        guard let raw = payload["suggestedExercises"] else { return nil }
+        let rows = dictionaryArray(raw) ?? []
+        return rows.compactMap { row in
+            guard
+                let exerciseId = row["exerciseId"] as? String, !exerciseId.isEmpty,
+                let name = row["name"] as? String, !name.isEmpty
+            else { return nil }
+            return SuggestedExercise(exerciseId: exerciseId, name: name)
         }
     }
 
@@ -199,6 +246,7 @@ enum ContextPayloadMapper {
         return WaterSnapshot(
             day: day(from: payload),
             consumedMl: consumedMl,
+            fromFoodMl: payload["waterFromFoodMl"] as? Double,
             log: waterLog(from: payload)
         )
     }
@@ -236,6 +284,32 @@ enum ContextPayloadMapper {
         }
     }
 
+    /// Nil when the phone did not send the key — an older build, or a push
+    /// that crossed midnight and blanked its day figures. An empty array is a
+    /// real answer: nothing is scheduled today.
+    static func medications(from payload: [String: Any]) -> MedicationSnapshot? {
+        guard let raw = dictionaryArray(payload["medications"]) else { return nil }
+        let doses = raw.compactMap { entry -> MedicationDose? in
+            guard
+                let id = entry["id"] as? String,
+                let medicationId = entry["medicationId"] as? String,
+                let scheduleId = entry["scheduleId"] as? String,
+                let name = entry["name"] as? String,
+                let status = (entry["status"] as? String).flatMap(MedicationDoseStatus.init(rawValue:))
+            else { return nil }
+            return MedicationDose(
+                id: id,
+                medicationId: medicationId,
+                scheduleId: scheduleId,
+                name: name,
+                detail: entry["detail"] as? String ?? "",
+                time: entry["time"] as? String ?? "",
+                status: status
+            )
+        }
+        return MedicationSnapshot(day: day(from: payload), doses: doses)
+    }
+
     // MARK: - Complications
 
     /// The raw goal fractions for the Daily Energy Goal complication.
@@ -266,7 +340,17 @@ enum ContextPayloadMapper {
             let fat = value("fatGoalProgress")
         else { return nil }
 
-        return GoalProgress(calories: calories, protein: protein, carbs: carbs, fat: fat)
+        func grams(_ consumed: String, _ goal: String) -> MacroGrams? {
+            guard let eaten = value(consumed), let target = value(goal) else { return nil }
+            return MacroGrams(consumed: eaten, goal: target)
+        }
+
+        return GoalProgress(
+            calories: calories, protein: protein, carbs: carbs, fat: fat,
+            proteinGrams: grams("proteinConsumed", "proteinGoal"),
+            carbsGrams: grams("carbsConsumed", "carbsGoal"),
+            fatGrams: grams("fatConsumed", "fatGoal")
+        )
     }
 
     // MARK: - Workout
@@ -280,6 +364,54 @@ enum ContextPayloadMapper {
         guard let sessionId = payload["sessionId"] as? String else { return nil }
         // Absent from an older phone build, which only ever finished.
         return (sessionId, isoDate(from: payload["stoppedAt"]), payload["discarded"] as? Bool ?? false)
+    }
+
+    /// A phone `recordingState` message. Nil when malformed, so a bad payload
+    /// leaves whatever the watch is showing alone.
+    static func recordingUpdate(from payload: [String: Any]) -> RecordingUpdate? {
+        guard let sessionId = payload["sessionId"] as? String,
+              let statusRaw = payload["status"] as? String,
+              let status = RecordingStatus(rawValue: statusRaw)
+        else { return nil }
+        let sentAt = doubleValue(payload["sentAt"]) ?? 0
+        if status == .ended {
+            return .ended(
+                sessionId: sessionId,
+                sentAt: sentAt,
+                discarded: payload["discarded"] as? Bool ?? false
+            )
+        }
+        // Epoch ms are parsed as Double: Int is 32-bit on arm64_32.
+        guard let activityRaw = payload["activity"] as? String,
+              let activity = RecordingActivity(rawValue: activityRaw),
+              let startedAtMs = doubleValue(payload["startedAt"])
+        else { return nil }
+        var interval: IntervalStep?
+        if let index = doubleValue(payload["intervalIndex"]),
+           let label = payload["intervalLabel"] as? String,
+           let remaining = doubleValue(payload["intervalRemaining"]) {
+            interval = IntervalStep(
+                index: Int(index),
+                label: label,
+                remaining: remaining,
+                next: payload["intervalNext"] as? String
+            )
+        }
+        return .state(RecordingState(
+            sessionId: sessionId,
+            activity: activity,
+            indoor: payload["indoor"] as? Bool ?? false,
+            status: status,
+            startedAt: Date(timeIntervalSince1970: startedAtMs / 1000),
+            pausedMs: doubleValue(payload["pausedMs"]) ?? 0,
+            pausedAt: doubleValue(payload["pausedAt"]).map { Date(timeIntervalSince1970: $0 / 1000) },
+            distanceMeters: doubleValue(payload["distanceMeters"]) ?? 0,
+            paceSeconds: doubleValue(payload["paceSeconds"]),
+            usesMiles: (payload["distanceUnit"] as? String) == "mi",
+            sentAt: sentAt,
+            lapCount: Int(doubleValue(payload["lapCount"]) ?? 0),
+            interval: interval
+        ))
     }
 
     static func isoDate(from value: Any?) -> Date? {
@@ -358,7 +490,8 @@ enum ContextPayloadMapper {
             timeCapSeconds: intValue(payload["timeCapSeconds"]),
             startedAt: startedAt,
             armedAt: isoDate(from: payload["armedAt"]),
-            capEndsAt: isoDate(from: payload["capEndsAt"])
+            capEndsAt: isoDate(from: payload["capEndsAt"]),
+            fromPreset: payload["fromPreset"] as? Bool
         )
     }
 
@@ -405,7 +538,7 @@ enum ContextPayloadMapper {
     static func setTargets(from payload: [String: Any]) -> (
         sessionId: String, revision: Double, targets: [String: SetValues],
         completedSetIds: Set<String>, rest: PhoneRest?,
-        armedAt: Date?
+        armedAt: Date?, prSetIds: Set<String>
     )? {
         guard
             let sessionId = payload["sessionId"] as? String,
@@ -452,7 +585,10 @@ enum ContextPayloadMapper {
         let armedAt = doubleValue(payload["armedAt"]).map {
             Date(timeIntervalSince1970: $0 / 1000)
         }
-        return (sessionId, revision, targets, completed, rest, armedAt)
+        // Logged sets the phone flagged as personal records. Absent from an
+        // older phone build, which simply never celebrates.
+        let prSetIds = Set(stringArray(payload["prSetIds"]))
+        return (sessionId, revision, targets, completed, rest, armedAt, prSetIds)
     }
 
     // MARK: - Acks

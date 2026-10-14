@@ -50,6 +50,7 @@ These tables contain highly sensitive credentials, API keys, SSO tokens, 2FA rec
 | `pregnancy_contractions` | Contraction timer logs | Owner-Only | Owner-Only |
 | `pregnancy_photos` | Bump photo journal (image bytes served only via the authenticated `GET /api/v2/pregnancy/photos/file/{id}`; excluded from the public `/uploads` static mount) | Owner-Only | Owner-Only |
 | `pregnancy_checklist_state` | Weekly pregnancy checklist completion/custom items | Owner-Only | Owner-Only |
+| `run_programs` | A person's run program (Beginner 5K), their place in it, its Diary schedule, goal date, AI adjustments and how hard finished workouts felt | Owner-Only | Owner-Only |
 | `health_appointments` | Prenatal & other health appointments | Owner-Only | Owner-Only |
 | `openfoodfacts_product_read_rate_limit` | Singleton coordination lease and cooldown for Open Food Facts product reads, including manual previews; contains no user data or credentials | System services only | Deny all |
 | `openfoodfacts_sync_queue` | Dormant automatic Open Food Facts upload state and retained history; stores food/user identifiers and retry metadata, never provider credentials. The manual first release does not enqueue or process these rows. | System worker and owning user | Owner-Only |
